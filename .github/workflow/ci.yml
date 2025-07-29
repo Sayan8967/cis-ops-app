@@ -353,122 +353,176 @@ jobs:
                         number: 80
           EOF
           
-      - name: Generate Prometheus Helm Values
+      - name: Generate Grafana Cloud Monitoring Values
         run: |
           mkdir -p deployment/helm
           
-          # Create Prometheus values file
-          cat <<EOF > deployment/helm/prometheus-values.yml
-          # Prometheus Helm Chart Values
-          prometheus:
+          # Create Grafana Cloud K8s Monitoring values file
+          cat <<EOF > deployment/helm/grafana-cloud-values.yml
+          # Grafana Cloud K8s Monitoring Values
+          cluster:
+            name: cis-ops-cluster
+          destinations:
+            - name: grafana-cloud-metrics
+              type: prometheus
+              url: ${{ secrets.GRAFANA_PROMETHEUS_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_PROMETHEUS_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+            - name: grafana-cloud-logs
+              type: loki
+              url: ${{ secrets.GRAFANA_LOKI_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_LOKI_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+            - name: grafana-cloud-otlp-endpoint
+              type: otlp
+              url: ${{ secrets.GRAFANA_OTLP_URL }}
+              protocol: http
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_OTLP_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+              metrics:
+                enabled: true
+              logs:
+                enabled: true
+              traces:
+                enabled: true
+            - name: grafana-cloud-profiles
+              type: pyroscope
+              url: ${{ secrets.GRAFANA_PROFILES_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_PROFILES_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+          clusterMetrics:
             enabled: true
-            prometheusSpec:
-              serviceMonitorSelectorNilUsesHelmValues: false
-              serviceMonitorSelector: {}
-              ruleSelector: {}
-              retention: 30d
-              storageSpec:
-                volumeClaimTemplate:
-                  spec:
-                    storageClassName: gp2
-                    accessModes: ["ReadWriteOnce"]
-                    resources:
-                      requests:
-                        storage: 10Gi
-              resources:
-                requests:
-                  memory: "2Gi"
-                  cpu: "1000m"
-                limits:
-                  memory: "4Gi"
-                  cpu: "2000m"
-                  
-          grafana:
-            enabled: true
-            adminPassword: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
-            persistence:
+            opencost:
               enabled: true
-              storageClassName: gp2
-              size: 5Gi
-            resources:
-              requests:
-                memory: "256Mi"
-                cpu: "250m"
-              limits:
-                memory: "512Mi"
-                cpu: "500m"
-            dashboardProviders:
-              dashboardproviders.yaml:
-                apiVersion: 1
-                providers:
-                - name: 'default'
-                  orgId: 1
-                  folder: ''
-                  type: file
-                  disableDeletion: false
-                  editable: true
-                  options:
-                    path: /var/lib/grafana/dashboards/default
-            dashboards:
-              default:
-                cis-ops-dashboard:
-                  gnetId: 1860
-                  revision: 27
-                  datasource: Prometheus
-                node-exporter:
-                  gnetId: 11074
-                  revision: 9
-                  datasource: Prometheus
-                  
-          alertmanager:
+              metricsSource: grafana-cloud-metrics
+              opencost:
+                exporter:
+                  defaultClusterId: cis-ops-cluster
+                prometheus:
+                  existingSecretName: grafana-cloud-metrics-grafana-k8s-monitoring
+                  external:
+                    url: ${{ secrets.GRAFANA_PROMETHEUS_URL }}
+            kepler:
+              enabled: true
+          annotationAutodiscovery:
             enabled: true
-            alertmanagerSpec:
-              storage:
-                volumeClaimTemplate:
-                  spec:
-                    storageClassName: gp2
-                    accessModes: ["ReadWriteOnce"]
-                    resources:
-                      requests:
-                        storage: 2Gi
-                        
-          nodeExporter:
+          prometheusOperatorObjects:
             enabled: true
-            
-          kubeStateMetrics:
+          clusterEvents:
             enabled: true
-            
-          defaultRules:
-            create: true
-            rules:
-              alertmanager: true
-              etcd: false
-              kubernetesApps: true
-              kubernetesResources: true
-              kubernetesStorage: true
-              kubernetesSystem: true
-              node: true
-              prometheus: true
+          nodeLogs:
+            enabled: true
+          podLogs:
+            enabled: true
+          applicationObservability:
+            enabled: true
+            receivers:
+              otlp:
+                grpc:
+                  enabled: true
+                  port: 4317
+                http:
+                  enabled: true
+                  port: 4318
+              zipkin:
+                enabled: true
+                port: 9411
+            connectors:
+              grafanaCloudMetrics:
+                enabled: true
+          autoInstrumentation:
+            enabled: true
+          profiling:
+            enabled: true
+          alloy-metrics:
+            enabled: true
+            alloy:
+              extraEnv:
+                - name: GCLOUD_RW_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: alloy-metrics-remote-cfg-grafana-k8s-monitoring
+                      key: password
+                - name: CLUSTER_NAME
+                  value: cis-ops-cluster
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: GCLOUD_FM_COLLECTOR_ID
+                  value: grafana-k8s-monitoring-$(CLUSTER_NAME)-$(NAMESPACE)-$(POD_NAME)
+            remoteConfig:
+              enabled: true
+              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+          alloy-singleton:
+            enabled: true
+            remoteConfig:
+              enabled: true
+              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+          alloy-logs:
+            enabled: true
+            remoteConfig:
+              enabled: true
+              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+          alloy-receiver:
+            enabled: true
+            alloy:
+              extraPorts:
+                - name: otlp-grpc
+                  port: 4317
+                  targetPort: 4317
+                  protocol: TCP
+                - name: otlp-http
+                  port: 4318
+                  targetPort: 4318
+                  protocol: TCP
+                - name: zipkin
+                  port: 9411
+                  targetPort: 9411
+                  protocol: TCP
+            remoteConfig:
+              enabled: true
+              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
+          alloy-profiles:
+            enabled: true
+            remoteConfig:
+              enabled: true
+              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
+              auth:
+                type: basic
+                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
+                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
           EOF
           
-          # Create ServiceMonitor for backend monitoring
-          cat <<EOF > deployment/k8s/servicemonitor.yml
-          apiVersion: monitoring.coreos.com/v1
-          kind: ServiceMonitor
-          metadata:
-            name: cis-ops-backend-monitor
-            namespace: cis-ops
-            labels:
-              app: cis-ops-backend
-          spec:
-            selector:
-              matchLabels:
-                app: cis-ops-backend
-            endpoints:
-            - port: http
-              path: /api/metrics
-              interval: 30s
-          EOF
+
           
           # Create deployment script
           cat <<EOF > deployment/deploy.sh
@@ -483,21 +537,20 @@ jobs:
           kubectl apply -f k8s/backend-deployment.yml
           kubectl apply -f k8s/frontend-deployment.yml
           kubectl apply -f k8s/ingress.yml
-          kubectl apply -f k8s/servicemonitor.yml
           
-          # Install/Upgrade Prometheus using Helm
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          # Install/Upgrade Grafana Cloud K8s Monitoring using Helm
+          helm repo add grafana https://grafana.github.io/helm-charts
           helm repo update
           
-          helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack \
-            --namespace monitoring \
-            --create-namespace \
-            --values helm/prometheus-values.yml \
-            --wait
+          helm upgrade --install --atomic --timeout 300s grafana-k8s-monitoring grafana/k8s-monitoring \\
+            --namespace "monitoring" \\
+            --create-namespace \\
+            --values helm/grafana-cloud-values.yml
           
           echo "Deployment completed successfully!"
           echo "Access your application at: http://cis-ops.example.com"
-          echo "Access Grafana at: http://grafana.example.com (admin/\$GRAFANA_ADMIN_PASSWORD)"
+          echo "Access Grafana Cloud dashboard at your Grafana Cloud instance"
+          echo "Monitoring data will be sent to Grafana Cloud automatically"
           EOF
           
           chmod +x deployment/deploy.sh
@@ -518,9 +571,9 @@ jobs:
           echo "- **Backend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Namespace**: \`cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Monitoring**: Prometheus + Grafana in \`monitoring\` namespace" >> $GITHUB_STEP_SUMMARY
+          echo "- **Monitoring**: Grafana Cloud integration in \`monitoring\` namespace" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
           echo "1. Update your DNS to point \`cis-ops.example.com\` to your ingress controller" >> $GITHUB_STEP_SUMMARY
           echo "2. Create ArgoCD applications manually to sync from \`deployment/k8s\` directory" >> $GITHUB_STEP_SUMMARY
-          echo "3. Access Grafana with admin password from secrets" >> $GITHUB_STEP_SUMMARY
+          echo "3. Access Grafana Cloud dashboard at your Grafana Cloud instance" >> $GITHUB_STEP_SUMMARY
