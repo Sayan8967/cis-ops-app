@@ -1,0 +1,526 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ release ]
+  pull_request:
+    branches: [ release ]
+
+env:
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  BACKEND_IMAGE: cis-ops-backend
+  FRONTEND_IMAGE: cis-ops-frontend
+
+jobs:
+  # Backend Build Job
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+          
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          npm ci
+          
+      - name: Build backend
+        run: |
+          cd backend
+          npm run build --if-present
+
+  # Frontend Build Job
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+          
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+          
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm run build
+        env:
+          REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
+          REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+
+  # Docker Build and Push Jobs
+  docker-backend:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Login to Docker Registry
+        run: |
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
+      
+      - name: Build and Push Backend Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          file: backend/Dockerfile
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-frontend:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+        
+      - name: Login to Docker Registry
+        run: |
+          docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
+      
+      - name: Build and Push Frontend Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          file: frontend/Dockerfile
+          build-args: |
+            REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }}
+            REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Security Scanning
+  trivy-scan-backend:
+    needs: docker-backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Trivy vulnerability scanner - Backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'backend-trivy-results.sarif'
+          
+      - name: Upload Trivy scan results - Backend
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'backend-trivy-results.sarif'
+
+  trivy-scan-frontend:
+    needs: docker-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Trivy vulnerability scanner - Frontend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'frontend-trivy-results.sarif'
+          
+      - name: Upload Trivy scan results - Frontend
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'frontend-trivy-results.sarif'
+
+  # Generate Kubernetes Manifests
+  k8s-manifest:
+    needs: [trivy-scan-backend, trivy-scan-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          
+      - name: Generate Kubernetes manifests
+        run: |
+          mkdir -p deployment/k8s
+          
+          # Create Namespace
+          cat <<EOF > deployment/k8s/namespace.yml
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cis-ops
+            labels:
+              name: cis-ops
+          EOF
+          
+          # Create ConfigMap for environment variables
+          cat <<EOF > deployment/k8s/configmap.yml
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cis-ops-config
+            namespace: cis-ops
+          data:
+            NODE_ENV: "production"
+            PORT: "4000"
+          EOF
+          
+          # Create Backend Deployment
+          cat <<EOF > deployment/k8s/backend-deployment.yml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cis-ops-backend
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cis-ops-backend
+            template:
+              metadata:
+                labels:
+                  app: cis-ops-backend
+              spec:
+                containers:
+                - name: backend
+                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+                  ports:
+                  - containerPort: 4000
+                    name: http
+                  envFrom:
+                  - configMapRef:
+                      name: cis-ops-config
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "250m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                  livenessProbe:
+                    httpGet:
+                      path: /api/metrics
+                      port: 4000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /api/metrics
+                      port: 4000
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-backend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+          spec:
+            selector:
+              app: cis-ops-backend
+            ports:
+            - name: http
+              port: 4000
+              targetPort: 4000
+            type: ClusterIP
+          EOF
+          
+          # Create Frontend Deployment
+          cat <<EOF > deployment/k8s/frontend-deployment.yml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cis-ops-frontend
+            namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cis-ops-frontend
+            template:
+              metadata:
+                labels:
+                  app: cis-ops-frontend
+              spec:
+                containers:
+                - name: frontend
+                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+                  ports:
+                  - containerPort: 80
+                    name: http
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "256Mi"
+                      cpu: "200m"
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-frontend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+          spec:
+            selector:
+              app: cis-ops-frontend
+            ports:
+            - name: http
+              port: 80
+              targetPort: 80
+            type: ClusterIP
+          EOF
+          
+          # Create Ingress
+          cat <<EOF > deployment/k8s/ingress.yml
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: cis-ops-ingress
+            namespace: cis-ops
+            annotations:
+              kubernetes.io/ingress.class: "nginx"
+              nginx.ingress.kubernetes.io/ssl-redirect: "false"
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            rules:
+            - host: cis-ops.example.com
+              http:
+                paths:
+                - path: /api
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                - path: /socket.io
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-frontend-service
+                      port:
+                        number: 80
+          EOF
+          
+      - name: Generate Prometheus Helm Values
+        run: |
+          mkdir -p deployment/helm
+          
+          # Create Prometheus values file
+          cat <<EOF > deployment/helm/prometheus-values.yml
+          # Prometheus Helm Chart Values
+          prometheus:
+            enabled: true
+            prometheusSpec:
+              serviceMonitorSelectorNilUsesHelmValues: false
+              serviceMonitorSelector: {}
+              ruleSelector: {}
+              retention: 30d
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: gp2
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 10Gi
+              resources:
+                requests:
+                  memory: "2Gi"
+                  cpu: "1000m"
+                limits:
+                  memory: "4Gi"
+                  cpu: "2000m"
+                  
+          grafana:
+            enabled: true
+            adminPassword: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+            persistence:
+              enabled: true
+              storageClassName: gp2
+              size: 5Gi
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "250m"
+              limits:
+                memory: "512Mi"
+                cpu: "500m"
+            dashboardProviders:
+              dashboardproviders.yaml:
+                apiVersion: 1
+                providers:
+                - name: 'default'
+                  orgId: 1
+                  folder: ''
+                  type: file
+                  disableDeletion: false
+                  editable: true
+                  options:
+                    path: /var/lib/grafana/dashboards/default
+            dashboards:
+              default:
+                cis-ops-dashboard:
+                  gnetId: 1860
+                  revision: 27
+                  datasource: Prometheus
+                node-exporter:
+                  gnetId: 11074
+                  revision: 9
+                  datasource: Prometheus
+                  
+          alertmanager:
+            enabled: true
+            alertmanagerSpec:
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: gp2
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 2Gi
+                        
+          nodeExporter:
+            enabled: true
+            
+          kubeStateMetrics:
+            enabled: true
+            
+          defaultRules:
+            create: true
+            rules:
+              alertmanager: true
+              etcd: false
+              kubernetesApps: true
+              kubernetesResources: true
+              kubernetesStorage: true
+              kubernetesSystem: true
+              node: true
+              prometheus: true
+          EOF
+          
+          # Create ServiceMonitor for backend monitoring
+          cat <<EOF > deployment/k8s/servicemonitor.yml
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: cis-ops-backend-monitor
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+          spec:
+            selector:
+              matchLabels:
+                app: cis-ops-backend
+            endpoints:
+            - port: http
+              path: /api/metrics
+              interval: 30s
+          EOF
+          
+          # Create deployment script
+          cat <<EOF > deployment/deploy.sh
+          #!/bin/bash
+          set -e
+          
+          echo "Deploying CIS Operations Dashboard..."
+          
+          # Apply Kubernetes manifests
+          kubectl apply -f k8s/namespace.yml
+          kubectl apply -f k8s/configmap.yml
+          kubectl apply -f k8s/backend-deployment.yml
+          kubectl apply -f k8s/frontend-deployment.yml
+          kubectl apply -f k8s/ingress.yml
+          kubectl apply -f k8s/servicemonitor.yml
+          
+          # Install/Upgrade Prometheus using Helm
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          
+          helm upgrade --install prometheus-stack prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace \
+            --values helm/prometheus-values.yml \
+            --wait
+          
+          echo "Deployment completed successfully!"
+          echo "Access your application at: http://cis-ops.example.com"
+          echo "Access Grafana at: http://grafana.example.com (admin/\$GRAFANA_ADMIN_PASSWORD)"
+          EOF
+          
+          chmod +x deployment/deploy.sh
+          
+
+          
+      - name: Commit and push manifests to repo
+        run: |
+          git add deployment/
+          git commit -m "Update k8s manifests and Prometheus config for ${{ github.sha }}" || echo "No changes to commit"
+          git push origin HEAD:${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Create deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Namespace**: \`cis-ops\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Monitoring**: Prometheus + Grafana in \`monitoring\` namespace" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Update your DNS to point \`cis-ops.example.com\` to your ingress controller" >> $GITHUB_STEP_SUMMARY
+          echo "2. Create ArgoCD applications manually to sync from \`deployment/k8s\` directory" >> $GITHUB_STEP_SUMMARY
+          echo "3. Access Grafana with admin password from secrets" >> $GITHUB_STEP_SUMMARY
