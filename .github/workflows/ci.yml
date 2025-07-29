@@ -559,6 +559,7 @@ jobs:
           
       - name: Commit and push manifests to repo
         run: |
+          git pull origin release || echo "No changes to pull"
           git add deployment/
           git commit -m "Update k8s manifests and Prometheus config for ${{ github.sha }}" || echo "No changes to commit"
           git push origin HEAD:${{ github.ref_name }}
