@@ -819,4 +819,4 @@ jobs:
           echo "      kubeletExtraArgs:" >> $GITHUB_STEP_SUMMARY
           echo "        node-labels: \"ingress-ready=true\"" >> $GITHUB_STEP_SUMMARY
           echo "EOF" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARYY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
