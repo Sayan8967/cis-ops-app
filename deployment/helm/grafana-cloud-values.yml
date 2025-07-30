@@ -1,0 +1,161 @@
+# Grafana Cloud K8s Monitoring Values
+cluster:
+  name: cis-ops-cluster
+destinations:
+  - name: grafana-cloud-metrics
+    type: prometheus
+    url: https://prometheus-prod-56-prod-us-east-2.grafana.net./api/prom/push
+    auth:
+      type: basic
+      username: 2590525
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+  - name: grafana-cloud-logs
+    type: loki
+    url: https://logs-prod-036.grafana.net./loki/api/v1/push
+    auth:
+      type: basic
+      username: 1290939
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+  - name: grafana-cloud-otlp-endpoint
+    type: otlp
+    url: https://otlp-gateway-prod-us-east-2.grafana.net./otlp
+    protocol: http
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+    metrics:
+      enabled: true
+    logs:
+      enabled: true
+    traces:
+      enabled: true
+  - name: grafana-cloud-profiles
+    type: pyroscope
+    url: https://profiles-prod-001.grafana.net.:443
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+clusterMetrics:
+  enabled: true
+  opencost:
+    enabled: true
+    metricsSource: grafana-cloud-metrics
+    opencost:
+      exporter:
+        defaultClusterId: cis-ops-cluster
+      prometheus:
+        existingSecretName: grafana-cloud-metrics-grafana-k8s-monitoring
+        external:
+          url: https://prometheus-prod-56-prod-us-east-2.grafana.net./api/prom/push
+  kepler:
+    enabled: true
+annotationAutodiscovery:
+  enabled: true
+prometheusOperatorObjects:
+  enabled: true
+clusterEvents:
+  enabled: true
+nodeLogs:
+  enabled: true
+podLogs:
+  enabled: true
+applicationObservability:
+  enabled: true
+  receivers:
+    otlp:
+      grpc:
+        enabled: true
+        port: 4317
+      http:
+        enabled: true
+        port: 4318
+    zipkin:
+      enabled: true
+      port: 9411
+  connectors:
+    grafanaCloudMetrics:
+      enabled: true
+autoInstrumentation:
+  enabled: true
+profiling:
+  enabled: true
+alloy-metrics:
+  enabled: true
+  alloy:
+    extraEnv:
+      - name: GCLOUD_RW_API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: alloy-metrics-remote-cfg-grafana-k8s-monitoring
+            key: password
+      - name: CLUSTER_NAME
+        value: cis-ops-cluster
+      - name: NAMESPACE
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.namespace
+      - name: POD_NAME
+        valueFrom:
+          fieldRef:
+            fieldPath: metadata.name
+      - name: GCLOUD_FM_COLLECTOR_ID
+        value: grafana-k8s-monitoring---
+  remoteConfig:
+    enabled: true
+    url: https://fleet-management-prod-008.grafana.net
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+alloy-singleton:
+  enabled: true
+  remoteConfig:
+    enabled: true
+    url: https://fleet-management-prod-008.grafana.net
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+alloy-logs:
+  enabled: true
+  remoteConfig:
+    enabled: true
+    url: https://fleet-management-prod-008.grafana.net
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+alloy-receiver:
+  enabled: true
+  alloy:
+    extraPorts:
+      - name: otlp-grpc
+        port: 4317
+        targetPort: 4317
+        protocol: TCP
+      - name: otlp-http
+        port: 4318
+        targetPort: 4318
+        protocol: TCP
+      - name: zipkin
+        port: 9411
+        targetPort: 9411
+        protocol: TCP
+  remoteConfig:
+    enabled: true
+    url: https://fleet-management-prod-008.grafana.net
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
+alloy-profiles:
+  enabled: true
+  remoteConfig:
+    enabled: true
+    url: https://fleet-management-prod-008.grafana.net
+    auth:
+      type: basic
+      username: 1333145
+      password: glc_eyJvIjoiMTQ5NjM5NSIsIm4iOiJzdGFjay0xMzMzMTQ1LWludGVncmF0aW9uLWdyYWZhbmFfdG9rZW4tZ3JhZmFuYV90b2tlbiIsImsiOiJuSGRQNDM1QXBTNmcycTYxWk9BN3I5NUwiLCJtIjp7InIiOiJwcm9kLXVzLWVhc3QtMCJ9fQ==
