@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:dcd0cb50510647c7e9926d7b539aa8c2f04a600c
+        image: docker.io/sayan896/cis-ops-backend:ce0ece41ea773d09ebb8bda21f15004d23462097
         ports:
         - containerPort: 4000
           name: http
