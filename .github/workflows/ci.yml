@@ -61,29 +61,22 @@ jobs:
           REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
           REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
 
-  # Docker Build and Push Jobs
+  # Docker Build Jobs
   docker-backend:
     needs: build-backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-        
       - name: Login to Docker Registry
         run: |
           docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
-      
+
       - name: Build and Push Backend Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          push: true
-          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          file: backend/Dockerfile
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          cd backend
+          docker build -t ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }} .
+          docker push ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
 
   docker-frontend:
     needs: build-frontend
@@ -91,60 +84,34 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-        
       - name: Login to Docker Registry
         run: |
           docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
-      
+
       - name: Build and Push Frontend Docker image
-        uses: docker/build-push-action@v4
-        with:
-          context: ./frontend
-          push: true
-          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          file: frontend/Dockerfile
-          build-args: |
-            REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }}
-            REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: |
+          cd frontend
+          docker build --build-arg REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }} \
+                       --build-arg REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }} \
+                       -t ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} .
+          docker push ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
   # Security Scanning
   trivy-scan-backend:
     needs: docker-backend
     runs-on: ubuntu-latest
     steps:
-      - name: Run Trivy vulnerability scanner - Backend
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          format: 'sarif'
-          output: 'backend-trivy-results.sarif'
-          
-      - name: Upload Trivy scan results - Backend
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'backend-trivy-results.sarif'
 
   trivy-scan-frontend:
     needs: docker-frontend
     runs-on: ubuntu-latest
     steps:
-      - name: Run Trivy vulnerability scanner - Frontend
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-          format: 'sarif'
-          output: 'frontend-trivy-results.sarif'
-          
-      - name: Upload Trivy scan results - Frontend
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'frontend-trivy-results.sarif'
 
   # Generate Kubernetes Manifests
   k8s-manifest:
@@ -153,49 +120,31 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Configure Git
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          
+
       - name: Generate Kubernetes manifests
         run: |
-          mkdir -p deployment/k8s
+          mkdir -p deployment
           
           # Create Namespace
-          cat <<EOF > deployment/k8s/namespace.yml
+          cat <<EOF > deployment/namespace.yml
           apiVersion: v1
           kind: Namespace
           metadata:
             name: cis-ops
-            labels:
-              name: cis-ops
           EOF
           
-          # Create ConfigMap for environment variables
-          cat <<EOF > deployment/k8s/configmap.yml
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: cis-ops-config
-            namespace: cis-ops
-          data:
-            NODE_ENV: "production"
-            PORT: "4000"
-          EOF
-          
-          # Create Backend Deployment
-          cat <<EOF > deployment/k8s/backend-deployment.yml
+          # Create Backend Deployment and Service
+          cat <<EOF > deployment/backend.yml
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: cis-ops-backend
             namespace: cis-ops
-            labels:
-              app: cis-ops-backend
           spec:
             replicas: 2
             selector:
@@ -211,10 +160,11 @@ jobs:
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
                   ports:
                   - containerPort: 4000
-                    name: http
-                  envFrom:
-                  - configMapRef:
-                      name: cis-ops-config
+                  env:
+                  - name: NODE_ENV
+                    value: "production"
+                  - name: PORT
+                    value: "4000"
                   resources:
                     requests:
                       memory: "256Mi"
@@ -222,45 +172,28 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
-                  livenessProbe:
-                    httpGet:
-                      path: /api/metrics
-                      port: 4000
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
-                  readinessProbe:
-                    httpGet:
-                      path: /api/metrics
-                      port: 4000
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
           ---
           apiVersion: v1
           kind: Service
           metadata:
             name: cis-ops-backend-service
             namespace: cis-ops
-            labels:
-              app: cis-ops-backend
           spec:
             selector:
               app: cis-ops-backend
             ports:
-            - name: http
-              port: 4000
+            - port: 4000
               targetPort: 4000
             type: ClusterIP
           EOF
           
-          # Create Frontend Deployment
-          cat <<EOF > deployment/k8s/frontend-deployment.yml
+          # Create Frontend Deployment and Service
+          cat <<EOF > deployment/frontend.yml
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: cis-ops-frontend
             namespace: cis-ops
-            labels:
-              app: cis-ops-frontend
           spec:
             replicas: 2
             selector:
@@ -276,7 +209,6 @@ jobs:
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
                   ports:
                   - containerPort: 80
-                    name: http
                   resources:
                     requests:
                       memory: "128Mi"
@@ -284,215 +216,23 @@ jobs:
                     limits:
                       memory: "256Mi"
                       cpu: "200m"
-                  livenessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
-                  readinessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
           ---
           apiVersion: v1
           kind: Service
           metadata:
             name: cis-ops-frontend-service
             namespace: cis-ops
-            labels:
-              app: cis-ops-frontend
           spec:
             selector:
               app: cis-ops-frontend
             ports:
-            - name: http
-              port: 80
+            - port: 80
               targetPort: 80
             type: ClusterIP
           EOF
           
-          # Create IngressClass definition
-          cat <<EOF > deployment/k8s/ingress-class.yml
-          apiVersion: networking.k8s.io/v1
-          kind: IngressClass
-          metadata:
-            name: nginx
-            annotations:
-              ingressclass.kubernetes.io/is-default-class: "true"
-          spec:
-            controller: k8s.io/ingress-nginx
-          EOF
-          
-          # Create Ingress with API version detection and fallback
-          cat <<'EOF' > deployment/k8s/ingress-detection.sh
-          #!/bin/bash
-          
-          # Function to detect supported Ingress API version
-          detect_ingress_api() {
-            if kubectl api-versions | grep -q "networking.k8s.io/v1" && kubectl api-resources | grep -q "ingresses.*networking.k8s.io/v1"; then
-              echo "networking.k8s.io/v1"
-            elif kubectl api-versions | grep -q "networking.k8s.io/v1beta1"; then
-              echo "networking.k8s.io/v1beta1"
-            elif kubectl api-versions | grep -q "extensions/v1beta1"; then
-              echo "extensions/v1beta1"
-            else
-              echo "none"
-            fi
-          }
-          
-          # Get the supported API version
-          API_VERSION=$(detect_ingress_api)
-          echo "Detected Ingress API version: $API_VERSION"
-          
-          # Generate appropriate ingress manifest based on API version
-          if [ "$API_VERSION" = "networking.k8s.io/v1" ]; then
-            cat > k8s/ingress.yml <<'INGRESS_EOF'
-          apiVersion: networking.k8s.io/v1
-          kind: Ingress
-          metadata:
-            name: cis-ops-ingress
-            namespace: cis-ops
-            annotations:
-              nginx.ingress.kubernetes.io/rewrite-target: /$2
-              nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
-              nginx.ingress.kubernetes.io/ssl-redirect: "false"
-              nginx.ingress.kubernetes.io/enable-cors: "true"
-              nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
-              nginx.ingress.kubernetes.io/cors-allow-origin: "*"
-              nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-              nginx.ingress.kubernetes.io/cors-allow-headers: "*"
-              nginx.ingress.kubernetes.io/proxy-body-size: "8m"
-          spec:
-            ingressClassName: nginx
-            rules:
-            - http:
-                paths:
-                - path: /api(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
-                - path: /socket.io(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
-                - path: /()(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    service:
-                      name: cis-ops-frontend-service
-                      port:
-                        number: 80
-          INGRESS_EOF
-          
-          elif [ "$API_VERSION" = "networking.k8s.io/v1beta1" ]; then
-            cat > k8s/ingress.yml <<'INGRESS_EOF'  
-          apiVersion: networking.k8s.io/v1beta1
-          kind: Ingress
-          metadata:
-            name: cis-ops-ingress
-            namespace: cis-ops
-            annotations:
-              kubernetes.io/ingress.class: "nginx"
-              nginx.ingress.kubernetes.io/rewrite-target: /$2
-              nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
-              nginx.ingress.kubernetes.io/ssl-redirect: "false"
-              nginx.ingress.kubernetes.io/enable-cors: "true"
-              nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
-              nginx.ingress.kubernetes.io/cors-allow-origin: "*"
-              nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-              nginx.ingress.kubernetes.io/cors-allow-headers: "*"
-              nginx.ingress.kubernetes.io/proxy-body-size: "8m"
-          spec:
-            rules:
-            - http:
-                paths:
-                - path: /api(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-backend-service
-                    servicePort: 4000
-                - path: /socket.io(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-backend-service
-                    servicePort: 4000
-                - path: /()(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-frontend-service
-                    servicePort: 80
-          INGRESS_EOF
-          
-          elif [ "$API_VERSION" = "extensions/v1beta1" ]; then
-            cat > k8s/ingress.yml <<'INGRESS_EOF'
-          apiVersion: extensions/v1beta1
-          kind: Ingress
-          metadata:
-            name: cis-ops-ingress
-            namespace: cis-ops
-            annotations:
-              kubernetes.io/ingress.class: "nginx"
-              nginx.ingress.kubernetes.io/rewrite-target: /$2
-              nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
-              nginx.ingress.kubernetes.io/ssl-redirect: "false"
-              nginx.ingress.kubernetes.io/enable-cors: "true"
-              nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
-              nginx.ingress.kubernetes.io/cors-allow-origin: "*"
-              nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-              nginx.ingress.kubernetes.io/cors-allow-headers: "*"
-              nginx.ingress.kubernetes.io/proxy-body-size: "8m"
-          spec:
-            rules:
-            - http:
-                paths:
-                - path: /api(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-backend-service
-                    servicePort: 4000
-                - path: /socket.io(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-backend-service
-                    servicePort: 4000
-                - path: /()(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    serviceName: cis-ops-frontend-service
-                    servicePort: 80
-          INGRESS_EOF
-          
-          else
-            echo "❌ No supported Ingress API version found!"
-            echo "Available API versions:"
-            kubectl api-versions | grep -E "(networking|extensions)"
-            echo "Available ingress resources:"
-            kubectl api-resources | grep ingress
-            exit 1
-          fi
-          
-          echo "✅ Generated ingress manifest for API version: $API_VERSION"
-          EOF
-          
-          chmod +x deployment/k8s/ingress-detection.sh
-          
-          # Create a simple fallback ingress in case detection fails
-          cat <<EOF > deployment/k8s/ingress.yml
+          # Create Ingress
+          cat <<EOF > deployment/ingress.yml
           apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
@@ -501,15 +241,12 @@ jobs:
             annotations:
               nginx.ingress.kubernetes.io/rewrite-target: /\$2
               nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
               nginx.ingress.kubernetes.io/ssl-redirect: "false"
               nginx.ingress.kubernetes.io/enable-cors: "true"
               nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
               nginx.ingress.kubernetes.io/cors-allow-origin: "*"
               nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
               nginx.ingress.kubernetes.io/cors-allow-headers: "*"
-              nginx.ingress.kubernetes.io/proxy-body-size: "8m"
           spec:
             ingressClassName: nginx
             rules:
@@ -537,585 +274,57 @@ jobs:
                       port:
                         number: 80
           EOF
-
-      - name: Generate Grafana Cloud Monitoring Values
-        run: |
-          mkdir -p deployment/helm
           
-          # Create Grafana Cloud K8s Monitoring values file
-          cat <<EOF > deployment/helm/grafana-cloud-values.yml
-          # Grafana Cloud K8s Monitoring Values
-          cluster:
-            name: cis-ops-cluster
-          destinations:
-            - name: grafana-cloud-metrics
-              type: prometheus
-              url: ${{ secrets.GRAFANA_PROMETHEUS_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_PROMETHEUS_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-            - name: grafana-cloud-logs
-              type: loki
-              url: ${{ secrets.GRAFANA_LOKI_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_LOKI_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-            - name: grafana-cloud-otlp-endpoint
-              type: otlp
-              url: ${{ secrets.GRAFANA_OTLP_URL }}
-              protocol: http
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_OTLP_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-              metrics:
-                enabled: true
-              logs:
-                enabled: true
-              traces:
-                enabled: true
-            - name: grafana-cloud-profiles
-              type: pyroscope
-              url: ${{ secrets.GRAFANA_PROFILES_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_PROFILES_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          clusterMetrics:
-            enabled: true
-            opencost:
-              enabled: true
-              metricsSource: grafana-cloud-metrics
-              opencost:
-                exporter:
-                  defaultClusterId: cis-ops-cluster
-                prometheus:
-                  existingSecretName: grafana-cloud-metrics-grafana-k8s-monitoring
-                  external:
-                    url: ${{ secrets.GRAFANA_PROMETHEUS_URL }}
-            kepler:
-              enabled: true
-          annotationAutodiscovery:
-            enabled: true
-          prometheusOperatorObjects:
-            enabled: true
-          clusterEvents:
-            enabled: true
-          nodeLogs:
-            enabled: true
-          podLogs:
-            enabled: true
-          applicationObservability:
-            enabled: true
-            receivers:
-              otlp:
-                grpc:
-                  enabled: true
-                  port: 4317
-                http:
-                  enabled: true
-                  port: 4318
-              zipkin:
-                enabled: true
-                port: 9411
-            connectors:
-              grafanaCloudMetrics:
-                enabled: true
-          autoInstrumentation:
-            enabled: true
-          profiling:
-            enabled: true
-          alloy-metrics:
-            enabled: true
-            alloy:
-              extraEnv:
-                - name: GCLOUD_RW_API_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: alloy-metrics-remote-cfg-grafana-k8s-monitoring
-                      key: password
-                - name: CLUSTER_NAME
-                  value: cis-ops-cluster
-                - name: NAMESPACE
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.namespace
-                - name: POD_NAME
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.name
-                - name: GCLOUD_FM_COLLECTOR_ID
-                  value: grafana-k8s-monitoring-$(CLUSTER_NAME)-$(NAMESPACE)-$(POD_NAME)
-            remoteConfig:
-              enabled: true
-              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          alloy-singleton:
-            enabled: true
-            remoteConfig:
-              enabled: true
-              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          alloy-logs:
-            enabled: true
-            remoteConfig:
-              enabled: true
-              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          alloy-receiver:
-            enabled: true
-            alloy:
-              extraPorts:
-                - name: otlp-grpc
-                  port: 4317
-                  targetPort: 4317
-                  protocol: TCP
-                - name: otlp-http
-                  port: 4318
-                  targetPort: 4318
-                  protocol: TCP
-                - name: zipkin
-                  port: 9411
-                  targetPort: 9411
-                  protocol: TCP
-            remoteConfig:
-              enabled: true
-              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          alloy-profiles:
-            enabled: true
-            remoteConfig:
-              enabled: true
-              url: ${{ secrets.GRAFANA_FLEET_MANAGEMENT_URL }}
-              auth:
-                type: basic
-                username: ${{ secrets.GRAFANA_FLEET_USERNAME }}
-                password: ${{ secrets.GRAFANA_CLOUD_TOKEN }}
-          EOF
-
-      - name: Generate Enhanced Deployment Script
-        run: |
-          # Create deployment script with comprehensive ingress controller management
+          # Create deployment script
           cat <<EOF > deployment/deploy.sh
           #!/bin/bash
           set -e
           
           echo "🚀 Deploying CIS Operations Dashboard..."
           
-          # Function to check if a resource exists
-          resource_exists() {
-            kubectl get "\$1" "\$2" -n "\$3" >/dev/null 2>&1
-          }
-          
-          # Function to wait for deployment to be ready
-          wait_for_deployment() {
-            echo "⏳ Waiting for \$1 deployment to be ready..."
-            kubectl wait --for=condition=available --timeout=300s deployment/\$1 -n \$2
-          }
-          
           # Check if NGINX Ingress Controller is installed
-          echo "🔍 Checking NGINX Ingress Controller installation..."
-          
           if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-            echo "📦 NGINX Ingress Controller not found. Installing..."
-            
-            # Detect if running on cloud provider or bare metal
-            if kubectl get nodes -o jsonpath='{.items[*].spec.providerID}' | grep -q "^$"; then
-              echo "🏗️  Installing NGINX Ingress Controller for bare metal..."
-              kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
-            else
-              echo "☁️  Installing NGINX Ingress Controller for cloud provider..."
-              kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
-            fi
-            
+            echo "📦 Installing NGINX Ingress Controller..."
+            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
             echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-            kubectl wait --namespace ingress-nginx \\
-              --for=condition=ready pod \\
-              --selector=app.kubernetes.io/component=controller \\
-              --timeout=300s
-              
-            echo "✅ NGINX Ingress Controller installation completed"
-          else
-            echo "✅ NGINX Ingress Controller already installed"
-            
-            # Check if the controller is running
-            if ! kubectl get pods -n ingress-nginx -l app.kubernetes.io/component=controller --field-selector=status.phase=Running | grep -q Running; then
-              echo "⚠️  NGINX Ingress Controller pods are not running. Waiting for them to be ready..."
-              kubectl wait --namespace ingress-nginx \\
-                --for=condition=ready pod \\
-                --selector=app.kubernetes.io/component=controller \\
-                --timeout=300s
-            fi
+            kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
           fi
           
-          # Verify Ingress API availability and generate appropriate manifest
-          echo "🔍 Detecting supported Ingress API version..."
-          cd deployment
-          bash k8s/ingress-detection.sh || {
-            echo "⚠️  Ingress API detection failed, using fallback configuration"
-          }
-          
-          # Apply Kubernetes manifests in order
-          echo ""
+          # Apply manifests
           echo "📋 Applying Kubernetes manifests..."
+          kubectl apply -f namespace.yml
+          kubectl apply -f backend.yml
+          kubectl apply -f frontend.yml
+          kubectl apply -f ingress.yml
           
-          echo "📁 Creating namespace..."
-          kubectl apply -f k8s/namespace.yml
+          # Wait for deployments
+          echo "⏳ Waiting for deployments to be ready..."
+          kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-backend -n cis-ops
+          kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-frontend -n cis-ops
           
-          echo "⚙️  Applying configuration..."
-          kubectl apply -f k8s/configmap.yml
-          
-          echo "🏗️  Creating IngressClass..."
-          kubectl apply -f k8s/ingress-class.yml
-          
-          echo "🖥️  Deploying backend service..."
-          kubectl apply -f k8s/backend-deployment.yml
-          wait_for_deployment "cis-ops-backend" "cis-ops"
-          
-          echo "🌐 Deploying frontend service..."
-          kubectl apply -f k8s/frontend-deployment.yml
-          wait_for_deployment "cis-ops-frontend" "cis-ops"
-          
-          # Apply ingress with retry logic and validation
-          echo "🌍 Configuring ingress..."
-          
-          # First, verify that Ingress CRD exists
-          echo "🔍 Verifying Ingress Custom Resource Definition..."
-          if ! kubectl get crd ingresses.networking.k8s.io >/dev/null 2>&1 && ! kubectl get crd ingresses.extensions >/dev/null 2>&1; then
-            echo "❌ Ingress CRD not found! This might indicate an issue with the cluster setup."
-            echo "Available CRDs:"
-            kubectl get crd | grep ingress || echo "No ingress-related CRDs found"
-            echo "Available API resources:"
-            kubectl api-resources | grep -i ingress || echo "No ingress API resources found"
-            
-            echo "⚠️  Attempting to continue without ingress (services will still be accessible via port-forward)"
-          else
-            echo "✅ Ingress CRD exists"
-            
-            # Validate NGINX ingress controller admission webhook
-            echo "🔍 Validating NGINX admission webhook..."
-            for i in {1..5}; do
-              if kubectl get validatingadmissionwebhooks.admissionregistration.k8s.io ingress-nginx-admission >/dev/null 2>&1; then
-                echo "✅ NGINX admission webhook is available"
-                WEBHOOK_READY=true
-                break
-              else
-                echo "⏳ Waiting for NGINX admission webhook (attempt \$i/5)..."
-                sleep 10
-              fi
-            done
-            
-            # Check if ingress resource already exists and delete if necessary
-            if kubectl get ingress -n cis-ops cis-ops-ingress >/dev/null 2>&1; then
-              echo "🗑️  Removing existing ingress to ensure clean deployment..."
-              kubectl delete ingress -n cis-ops cis-ops-ingress --ignore-not-found=true
-              sleep 5
-            fi
-            
-            # Apply ingress with comprehensive retry logic
-            INGRESS_APPLIED=false
-            for i in {1..5}; do
-              echo "🔧 Applying ingress configuration (attempt \$i/5)..."
-              
-              # Try different approaches based on attempt number
-              case \$i in
-                1|2)
-                  # Standard approach
-                  if kubectl apply -f k8s/ingress.yml; then
-                    echo "✅ Ingress applied successfully"
-                    INGRESS_APPLIED=true
-                    break
-                  fi
-                  ;;
-                3)
-                  # Try with server-side apply
-                  echo "🔄 Trying server-side apply..."
-                  if kubectl apply --server-side -f k8s/ingress.yml; then
-                    echo "✅ Ingress applied successfully with server-side apply"
-                    INGRESS_APPLIED=true
-                    break
-                  fi
-                  ;;
-                4)
-                  # Try with force override
-                  echo "🔄 Trying with force override..."
-                  if kubectl apply -f k8s/ingress.yml --force; then
-                    echo "✅ Ingress applied successfully with force"
-                    INGRESS_APPLIED=true
-                    break
-                  fi
-                  ;;
-                5)
-                  # Try creating directly with kubectl create
-                  echo "🔄 Trying direct creation..."
-                  kubectl delete ingress -n cis-ops cis-ops-ingress --ignore-not-found=true
-                  sleep 5
-                  if kubectl create -f k8s/ingress.yml; then
-                    echo "✅ Ingress created successfully"
-                    INGRESS_APPLIED=true
-                    break
-                  fi
-                  ;;
-              esac
-              
-              echo "❌ Ingress application failed, attempt \$i/5"
-              echo "🔍 Debugging information:"
-              kubectl api-resources | grep -i ingress
-              kubectl get crd | grep ingress
-              
-              if [ \$i -lt 5 ]; then
-                echo "⏳ Waiting 15 seconds before retry..."
-                sleep 15
-              fi
-            done
-            
-            if [ "\$INGRESS_APPLIED" = "false" ]; then
-              echo "💥 Failed to apply ingress after 5 attempts"
-              echo "🔍 Final debugging information:"
-              echo "Available ingress API versions:"
-              kubectl api-versions | grep -E "(networking|extensions)"
-              echo "Available ingress resources:"
-              kubectl api-resources | grep -i ingress
-              echo "Ingress controller status:"
-              kubectl get pods -n ingress-nginx
-              kubectl get svc -n ingress-nginx
-              echo ""
-              echo "⚠️  Continuing deployment without ingress. Services can be accessed via:"
-              echo "   kubectl port-forward -n cis-ops svc/cis-ops-frontend-service 8080:80"
-              echo "   kubectl port-forward -n cis-ops svc/cis-ops-backend-service 8081:4000"
-            else
-              # Verify ingress configuration
-              echo "🔍 Verifying ingress configuration..."
-              kubectl get ingress -n cis-ops cis-ops-ingress -o wide
-              kubectl describe ingress -n cis-ops cis-ops-ingress
-            fi
-          fi
-          
-          # Install/Upgrade Grafana Cloud K8s Monitoring using Helm
-          echo ""
-          echo "📊 Setting up Grafana Cloud monitoring..."
-          
-          # Check if helm is available
-          if command -v helm >/dev/null 2>&1; then
-            helm repo add grafana https://grafana.github.io/helm-charts
-            helm repo update
-            
-            helm upgrade --install --atomic --timeout 300s grafana-k8s-monitoring grafana/k8s-monitoring \\
-              --namespace "monitoring" \\
-              --create-namespace \\
-              --values helm/grafana-cloud-values.yml
-            
-            echo "✅ Grafana Cloud monitoring configured"
-          else
-            echo "⚠️  Helm not found. Skipping Grafana Cloud monitoring setup."
-            echo "   Install Helm and run the monitoring setup manually."
-          fi
-          
-          echo ""
-          echo "🎉 Deployment completed successfully!"
-          echo ""
-          echo "=== 📊 Access Information ==="
-          
-          # Get ingress controller service info
-          INGRESS_SERVICE=\$(kubectl get svc -n ingress-nginx -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-          
-          if [ -n "\$INGRESS_SERVICE" ]; then
-            SERVICE_TYPE=\$(kubectl get svc -n ingress-nginx \$INGRESS_SERVICE -o jsonpath='{.spec.type}')
-            
-            if [ "\$SERVICE_TYPE" = "LoadBalancer" ]; then
-              EXTERNAL_IP=\$(kubectl get svc -n ingress-nginx \$INGRESS_SERVICE -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-              if [ -z "\$EXTERNAL_IP" ]; then
-                EXTERNAL_IP=\$(kubectl get svc -n ingress-nginx \$INGRESS_SERVICE -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-              fi
-              if [ -n "\$EXTERNAL_IP" ]; then
-                echo "🌐 Access your application at: http://\$EXTERNAL_IP"
-              else
-                echo "⏳ LoadBalancer IP pending. Check with: kubectl get svc -n ingress-nginx"
-              fi
-            elif [ "\$SERVICE_TYPE" = "NodePort" ]; then
-              NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
-              if [ -z "\$NODE_IP" ]; then
-                NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-              fi
-              NODE_PORT=\$(kubectl get svc -n ingress-nginx \$INGRESS_SERVICE -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}')
-              echo "🌐 Access your application at: http://\$NODE_IP:\$NODE_PORT"
-            else
-              echo "🔧 Use kubectl port-forward to access your application:"
-              echo "   kubectl port-forward -n ingress-nginx svc/\$INGRESS_SERVICE 8080:80"
-              echo "   Then visit: http://localhost:8080"
-            fi
-          else
-            echo "⚠️  Could not determine ingress access method"
-          fi
-          
-          echo "📈 Access Grafana Cloud dashboard at your Grafana Cloud instance"
-          echo "📊 Monitoring data will be sent to Grafana Cloud automatically"
-          
-          echo ""
-          echo "=== 🛠️  Useful Commands ==="
-          echo "Check application status: kubectl get all -n cis-ops"
-          echo "Check ingress status: kubectl get ingress -n cis-ops"
-          echo "View ingress controller logs: kubectl logs -n ingress-nginx deployment/ingress-nginx-controller"
-          echo "View frontend logs: kubectl logs -n cis-ops deployment/cis-ops-frontend"
-          echo "View backend logs: kubectl logs -n cis-ops deployment/cis-ops-backend"
-          echo "Check ingress controller admission webhook: kubectl get validatingadmissionwebhooks.admissionregistration.k8s.io"
-          
-          echo ""
-          echo "=== 🔍 Troubleshooting ==="
-          echo "If ingress issues persist:"
-          echo "1. Check ingress controller pods: kubectl get pods -n ingress-nginx"
-          echo "2. Check admission webhook: kubectl get validatingadmissionwebhooks.admissionregistration.k8s.io ingress-nginx-admission"
-          echo "3. Restart ingress controller: kubectl rollout restart deployment/ingress-nginx-controller -n ingress-nginx"
-          echo "4. Check ingress events: kubectl describe ingress -n cis-ops cis-ops-ingress"
+          echo "✅ Deployment completed successfully!"
+          echo "🌐 Check ingress status: kubectl get ingress -n cis-ops"
           EOF
           
           chmod +x deployment/deploy.sh
-          
-      - name: Commit and push manifests to repo
+
+      - name: Commit and push manifests
         run: |
           git pull origin release || echo "No changes to pull"
           git add deployment/
-          git commit -m "Update k8s manifests with NGINX ingress controller setup for ${{ github.sha }}" || echo "No changes to commit"
-          git push origin release
+          git commit -m "Update k8s manifests for ${{ github.sha }}" || echo "No changes to commit"
+          git push origin HEAD:${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
+
       - name: Create deployment summary
         run: |
           echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Namespace**: \`cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Ingress Controller**: NGINX with automatic installation" >> $GITHUB_STEP_SUMMARY
-          echo "- **Monitoring**: Grafana Cloud integration in \`monitoring\` namespace" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔧 Enhanced Features:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Automatic NGINX Ingress Controller Installation**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Ingress Controller Health Validation**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Admission Webhook Verification**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Retry Logic for Ingress Application**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Comprehensive Error Handling**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Deployment Status Monitoring**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Improved Ingress Configuration (based on reference)**" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **CORS and WebSocket Support**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Deployment Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. **Check/Install NGINX Ingress Controller**" >> $GITHUB_STEP_SUMMARY
-          echo "2. **Wait for Controller Readiness**" >> $GITHUB_STEP_SUMMARY
-          echo "3. **Apply Application Manifests**" >> $GITHUB_STEP_SUMMARY
-          echo "4. **Validate Admission Webhook**" >> $GITHUB_STEP_SUMMARY
-          echo "5. **Apply Ingress with Retry Logic**" >> $GITHUB_STEP_SUMMARY
-          echo "6. **Setup Grafana Cloud Monitoring**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🎯 Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. ArgoCD will automatically sync the updated manifests" >> $GITHUB_STEP_SUMMARY
-          echo "2. Run the deployment script: \`bash deployment/deploy.sh\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. Verify ingress status: \`kubectl get ingress -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "4. Check application health: \`kubectl get pods -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "5. Access your application through the ingress endpoint" >> $GITHUB_STEP_SUMMARY
-          echo "6. Monitor application metrics in Grafana Cloud" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚨 Troubleshooting:" >> $GITHUB_STEP_SUMMARY
-          echo "If you encounter ingress webhook errors:" >> $GITHUB_STEP_SUMMARY
-          echo "- The deployment script now automatically handles NGINX installation" >> $GITHUB_STEP_SUMMARY
-          echo "- Includes admission webhook validation and retry logic" >> $GITHUB_STEP_SUMMARY
-          echo "- Provides comprehensive error messages and troubleshooting steps" >> $GITHUB_STEP_SUMMARY
-          echo "- Run \`kubectl get validatingadmissionwebhooks.admissionregistration.k8s.io\` to verify webhook status" >> $GITHUB_STEP_SUMMARY
-
-  # Optional: Deploy to staging environment for validation
-  deploy-staging:
-    needs: k8s-manifest
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.28.0'
-          
-      - name: Configure kubectl for staging
-        run: |
-          # Configure kubectl for staging cluster
-          # This step depends on your staging cluster setup
-          echo "Configure kubectl for staging cluster here"
-          # Example:
-          # echo "${{ secrets.STAGING_KUBECONFIG }}" | base64 -d > kubeconfig
-          # export KUBECONFIG=kubeconfig
-          
-      - name: Deploy to staging
-        run: |
-          echo "🚀 Deploying to staging environment..."
-          
-          # Pull the latest manifests
-          git pull origin release
-          
-          # Run the deployment script
-          cd deployment
-          bash deploy.sh
-          
-          echo "✅ Staging deployment completed"
-          
-      - name: Run health checks
-        run: |
-          echo "🏥 Running health checks..."
-          
-          # Wait for deployments to be ready
-          kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-backend -n cis-ops
-          kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-frontend -n cis-ops
-          
-          # Check ingress status
-          kubectl get ingress -n cis-ops
-          
-          # Basic connectivity test
-          INGRESS_IP=$(kubectl get ingress -n cis-ops cis-ops-ingress -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          if [ -n "$INGRESS_IP" ]; then
-            curl -f http://$INGRESS_IP/ || echo "Frontend health check failed"
-            curl -f http://$INGRESS_IP/api/metrics || echo "Backend health check failed"
-          fi
-          
-          echo "✅ Health checks completed"
-          
-      - name: Comment on PR
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `🚀 **Staging Deployment Successful!**
-              
-              **Images:**
-              - Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`
-              - Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`
-              
-              **Features:**
-              - ✅ NGINX Ingress Controller auto-installation
-              - ✅ Admission webhook validation
-              - ✅ Enhanced error handling and retry logic
-              - ✅ Comprehensive deployment monitoring
-              
-              **Staging Environment:**
-              - Namespace: \`cis-ops\`
-              - Ingress: Configured with improved setup
-              - Monitoring: Grafana Cloud integration active
-              
-              Ready for production deployment! 🎉`
-            })
+          echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. Run: \`bash deployment/deploy.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check status: \`kubectl get pods -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. Get ingress IP: \`kubectl get ingress -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
