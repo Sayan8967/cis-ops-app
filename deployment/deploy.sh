@@ -1,36 +1,36 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Deploying CIS Operations Dashboard..."
+echo "🚀 Deploying CIS Operations Dashboard (Complete Manifest)..."
 
-# Detect cluster type and install appropriate NGINX Ingress Controller
-if kubectl get nodes -o jsonpath='{.items[0].metadata.name}' | grep -q "kind"; then
-  echo "📦 Detected Kind cluster - Installing NGINX Ingress Controller for Kind..."
-  if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/kind/deploy.yaml
-    echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-  fi
-else
-  echo "📦 Installing NGINX Ingress Controller for cloud..."
-  if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
-    echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-  fi
-fi
+# Apply the complete manifest
+echo "📋 Applying complete Kubernetes manifest..."
+kubectl apply -f complete-manifest.yaml
 
-# Apply manifests
-echo "📋 Applying Kubernetes manifests..."
-kubectl apply -f namespace.yml
-kubectl apply -f backend.yml
-kubectl apply -f frontend.yml
-kubectl apply -f ingress.yml
+# Wait for NGINX Ingress Controller
+echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/name=ingress-nginx \
+  --timeout=300s
 
 # Wait for deployments
-echo "⏳ Waiting for deployments to be ready..."
+echo "⏳ Waiting for application deployments to be ready..."
 kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-backend -n cis-ops
 kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-frontend -n cis-ops
 
 echo "✅ Deployment completed successfully!"
-echo "🌐 Check ingress status: kubectl get ingress -n cis-ops"
+echo ""
+echo "📊 Deployment Status:"
+kubectl get pods -n cis-ops
+echo ""
+kubectl get ingress -n cis-ops
+echo ""
+echo "🌐 Access your application:"
+echo "  - Kind cluster: http://localhost"
+echo "  - Port forward: kubectl port-forward svc/cis-ops-frontend-service 8080:80 -n cis-ops"
+echo ""
+echo "🔍 Useful commands:"
+echo "  kubectl logs -f deployment/cis-ops-backend -n cis-ops"
+echo "  kubectl logs -f deployment/cis-ops-frontend -n cis-ops"
+echo "  kubectl get pods -n cis-ops"
