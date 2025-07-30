@@ -1,7 +1,7 @@
 # ==============================================
 # CIS Operations Dashboard - Complete Manifest
-# Generated: 2025-07-30 21:59:18 UTC
-# Commit: ba1b5169fbf34b073dcef14eda41a75516533506
+# Generated: 2025-07-30 22:04:16 UTC
+# Commit: a5080d1b389ebadcbcacfc2e53fa6784ae8bffdd
 # Compatible with: Kind Cluster & Production
 # ==============================================
 
@@ -398,7 +398,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:ba1b5169fbf34b073dcef14eda41a75516533506
+        image: docker.io/sayan896/cis-ops-backend:a5080d1b389ebadcbcacfc2e53fa6784ae8bffdd
         ports:
         - name: http
           containerPort: 4000
@@ -489,7 +489,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: docker.io/sayan896/cis-ops-frontend:ba1b5169fbf34b073dcef14eda41a75516533506
+        image: docker.io/sayan896/cis-ops-frontend:a5080d1b389ebadcbcacfc2e53fa6784ae8bffdd
         ports:
         - name: http
           containerPort: 80
