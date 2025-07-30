@@ -1,7 +1,7 @@
 # ==============================================
 # CIS Operations Dashboard - Complete Manifest
-# Generated: 2025-07-30 22:15:48 UTC
-# Commit: 604dda6fea2fb387676975cdd8fae54efdb40f30
+# Generated: 2025-07-30 22:25:38 UTC
+# Commit: 137e1cbacd1de5c36a579c813195544501cb5350
 # ==============================================
 
 ---
@@ -17,14 +17,13 @@ metadata:
   name: ingress-nginx
 
 ---
-# NGINX Ingress Controller Service
 apiVersion: v1
 kind: Service
 metadata:
   name: ingress-nginx
   namespace: ingress-nginx
 spec:
-  type: LoadBalancer    # or NodePort for bare-metal
+  type: LoadBalancer
   selector:
     app.kubernetes.io/name: ingress-nginx
   ports:
@@ -36,7 +35,6 @@ spec:
       targetPort: https
 
 ---
-# NGINX Ingress Controller Deployment (fixed)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -60,7 +58,6 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
     spec:
-      # hostNetwork & nodeSelector removed so pods can schedule anywhere
       serviceAccountName: nginx-ingress-serviceaccount
       tolerations:
         - effect: NoSchedule
@@ -94,7 +91,6 @@ spec:
               port: 10254
 
 ---
-# IngressClass
 apiVersion: networking.k8s.io/v1
 kind: IngressClass
 metadata:
@@ -103,5 +99,3 @@ metadata:
     ingressclass.kubernetes.io/is-default-class: "true"
 spec:
   controller: k8s.io/ingress-nginx
-
-# … rest of your Namespace, ConfigMaps, RBAC, Deployments, Services, Ingress …
