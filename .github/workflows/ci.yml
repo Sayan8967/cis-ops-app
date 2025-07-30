@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [release]
+    branches: [release ]
   pull_request:
-    branches: [release]
+    branches: [ release ]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -16,19 +16,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
-
       - name: Install backend dependencies
         run: |
           cd backend
           npm ci
-
       - name: Build backend
         run: |
           cd backend
@@ -38,19 +35,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend dependencies
         run: |
           cd frontend
           npm ci
-
       - name: Build frontend
         run: |
           cd frontend
@@ -64,11 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Login to Docker Registry
         run: |
           docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
-
       - name: Build and Push Backend Docker image
         run: |
           cd backend
@@ -80,11 +72,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Login to Docker Registry
         run: |
           docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_REGISTRY_KEY }}
-
       - name: Build and Push Frontend Docker image
         run: |
           cd frontend
@@ -115,35 +105,76 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
       - name: Configure Git
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-
       - name: Generate Complete Kubernetes Manifest
         run: |
           mkdir -p deployment
-
           cat <<EOF > deployment/complete-manifest.yaml
           # ==============================================
           # CIS Operations Dashboard - Complete Manifest
           # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           # Commit: ${{ github.sha }}
           # ==============================================
-
           ---
           apiVersion: v1
           kind: Namespace
           metadata:
             name: cis-ops
-
           ---
           apiVersion: v1
           kind: Namespace
           metadata:
             name: ingress-nginx
-
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: nginx-ingress-serviceaccount
+            namespace: ingress-nginx
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nginx-configuration
+            namespace: ingress-nginx
+          data: {}
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: nginx-ingress-clusterrole
+          rules:
+            - apiGroups: [""]
+              resources: ["configmaps", "endpoints", "nodes", "pods", "secrets"]
+              verbs: ["list", "watch"]
+            - apiGroups: [""]
+              resources: ["services"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["ingresses"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["create", "patch"]
+            - apiGroups: ["networking.k8s.io"]
+              resources: ["ingresses/status"]
+              verbs: ["update"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: nginx-ingress-clusterrole-binding
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: nginx-ingress-clusterrole
+          subjects:
+            - kind: ServiceAccount
+              name: nginx-ingress-serviceaccount
+              namespace: ingress-nginx
           ---
           apiVersion: v1
           kind: Service
@@ -161,7 +192,6 @@ jobs:
               - name: https
                 port: 443
                 targetPort: https
-
           ---
           apiVersion: apps/v1
           kind: Deployment
@@ -217,7 +247,6 @@ jobs:
                       httpGet:
                         path: /healthz
                         port: 10254
-
           ---
           apiVersion: networking.k8s.io/v1
           kind: IngressClass
@@ -228,7 +257,6 @@ jobs:
           spec:
             controller: k8s.io/ingress-nginx
           EOF
-
       - name: Commit and push manifests
         run: |
           git pull origin release || echo "No changes to pull"
@@ -237,15 +265,14 @@ jobs:
           git push origin HEAD:${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create deployment summary
         run: |
-          echo "## \ud83d\ude80 K8s manifest generated" >> $GITHUB_STEP_SUMMARY
-          echo "- **Ingress Service**: \`ingress-nginx (LoadBalancer)\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **IngressClass**: \`nginx (default)\`" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 K8s manifest generated" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ingress Service**: `ingress-nginx (LoadBalancer)`" >> $GITHUB_STEP_SUMMARY
+          echo "- **IngressClass**: `nginx (default)`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Apply with:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "```bash" >> $GITHUB_STEP_SUMMARY
           echo "kubectl apply -f deployment/complete-manifest.yaml" >> $GITHUB_STEP_SUMMARY
           echo "kubectl rollout restart deployment/nginx-ingress-controller -n ingress-nginx" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
