@@ -4,13 +4,37 @@ metadata:
   name: cis-ops-ingress
   namespace: cis-ops
   annotations:
+    # Multiple ingress class annotations for compatibility
     kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ingress.class: "nginx"
+    
+    # Webhook bypass to prevent admission webhook issues
+    nginx.ingress.kubernetes.io/disable-admission-webhook: "true"
+    
+    # SSL and routing configuration
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
-    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+    
+    # Backend protocol and routing
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    
+    # CORS configuration for API calls
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization"
+    
+    # WebSocket support
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "cis-ops-backend-service"
 spec:
+  # Use ingressClassName as backup
+  ingressClassName: nginx
   rules:
-  - host: cis-ops.example.com
-    http:
+  # Default rule without host for flexibility
+  - http:
       paths:
       - path: /api
         pathType: Prefix
@@ -33,3 +57,29 @@ spec:
             name: cis-ops-frontend-service
             port:
               number: 80
+  # Optional: Add specific host rule if you have a domain
+  # Uncomment and modify the section below if you have a specific domain
+  # - host: your-domain.com
+  #   http:
+  #     paths:
+  #     - path: /api
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: cis-ops-backend-service
+  #           port:
+  #             number: 4000
+  #     - path: /socket.io
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: cis-ops-backend-service
+  #           port:
+  #             number: 4000
+  #     - path: /
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: cis-ops-frontend-service
+  #           port:
+  #             number: 80
