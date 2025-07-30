@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ release ]
+    branches: [release]
   pull_request:
-    branches: [ release ]
+    branches: [release]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -12,7 +12,6 @@ env:
   FRONTEND_IMAGE: cis-ops-frontend
 
 jobs:
-  # Backend Build Job
   build-backend:
     runs-on: ubuntu-latest
     steps:
@@ -35,7 +34,6 @@ jobs:
           cd backend
           npm run build --if-present
 
-  # Frontend Build Job
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -61,7 +59,6 @@ jobs:
           REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
           REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
 
-  # Docker Build Jobs
   docker-backend:
     needs: build-backend
     runs-on: ubuntu-latest
@@ -96,7 +93,6 @@ jobs:
                        -t ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }} .
           docker push ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-  # Security Scanning
   trivy-scan-backend:
     needs: docker-backend
     runs-on: ubuntu-latest
@@ -113,7 +109,6 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-  # Generate Complete Kubernetes Manifest
   generate-k8s-manifest:
     needs: [trivy-scan-backend, trivy-scan-frontend]
     runs-on: ubuntu-latest
@@ -150,14 +145,13 @@ jobs:
             name: ingress-nginx
 
           ---
-          # NGINX Ingress Controller Service
           apiVersion: v1
           kind: Service
           metadata:
             name: ingress-nginx
             namespace: ingress-nginx
           spec:
-            type: LoadBalancer    # or NodePort for bare-metal
+            type: LoadBalancer
             selector:
               app.kubernetes.io/name: ingress-nginx
             ports:
@@ -169,7 +163,6 @@ jobs:
                 targetPort: https
 
           ---
-          # NGINX Ingress Controller Deployment (fixed)
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -193,7 +186,6 @@ jobs:
                 annotations:
                   prometheus.io/scrape: "true"
               spec:
-                # hostNetwork & nodeSelector removed so pods can schedule anywhere
                 serviceAccountName: nginx-ingress-serviceaccount
                 tolerations:
                   - effect: NoSchedule
@@ -227,7 +219,6 @@ jobs:
                         port: 10254
 
           ---
-          # IngressClass
           apiVersion: networking.k8s.io/v1
           kind: IngressClass
           metadata:
@@ -236,8 +227,6 @@ jobs:
               ingressclass.kubernetes.io/is-default-class: "true"
           spec:
             controller: k8s.io/ingress-nginx
-
-          # … rest of your Namespace, ConfigMaps, RBAC, Deployments, Services, Ingress …
           EOF
 
       - name: Commit and push manifests
@@ -251,7 +240,7 @@ jobs:
 
       - name: Create deployment summary
         run: |
-          echo "## 🚀 K8s manifest generated" >> $GITHUB_STEP_SUMMARY
+          echo "## \ud83d\ude80 K8s manifest generated" >> $GITHUB_STEP_SUMMARY
           echo "- **Ingress Service**: \`ingress-nginx (LoadBalancer)\`" >> $GITHUB_STEP_SUMMARY
           echo "- **IngressClass**: \`nginx (default)\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
