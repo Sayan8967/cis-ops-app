@@ -113,8 +113,8 @@ jobs:
         with:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
-  # Generate Kubernetes Manifests
-  k8s-manifest:
+  # Generate Complete Kubernetes Manifest
+  generate-k8s-manifest:
     needs: [trivy-scan-backend, trivy-scan-frontend]
     runs-on: ubuntu-latest
     steps:
@@ -126,27 +126,400 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
 
-      - name: Generate Kubernetes manifests
+      - name: Generate Complete Kubernetes Manifest
         run: |
           mkdir -p deployment
           
-          # Create Namespace
-          cat <<EOF > deployment/namespace.yml
+          # Create complete all-in-one manifest
+          cat <<EOF > deployment/complete-manifest.yaml
+          # ==============================================
+          # CIS Operations Dashboard - Complete Manifest
+          # Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          # Commit: ${{ github.sha }}
+          # Compatible with: Kind Cluster & Production
+          # ==============================================
+          
+          ---
+          # Namespace
           apiVersion: v1
           kind: Namespace
           metadata:
             name: cis-ops
-          EOF
+            labels:
+              name: cis-ops
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/instance: production
           
-          # Create Backend Deployment and Service
-          cat <<EOF > deployment/backend.yml
+          ---
+          # NGINX Ingress Controller Namespace
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/instance: ingress-nginx
+          
+          ---
+          # ConfigMap for NGINX Configuration
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nginx-configuration
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          
+          ---
+          # ConfigMap for TCP Services
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: tcp-services
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          
+          ---
+          # ConfigMap for UDP Services
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: udp-services
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          
+          ---
+          # ServiceAccount for NGINX Ingress
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: nginx-ingress-serviceaccount
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          automountServiceAccountToken: true
+          
+          ---
+          # ClusterRole for NGINX Ingress
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: nginx-ingress-clusterrole
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          rules:
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+                - endpoints
+                - nodes
+                - pods
+                - secrets
+                - namespaces
+              verbs:
+                - list
+                - watch
+            - apiGroups:
+                - coordination.k8s.io
+              resources:
+                - leases
+              verbs:
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - nodes
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - services
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - networking.k8s.io
+              resources:
+                - ingresses
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - events
+              verbs:
+                - create
+                - patch
+            - apiGroups:
+                - networking.k8s.io
+              resources:
+                - ingresses/status
+              verbs:
+                - update
+            - apiGroups:
+                - networking.k8s.io
+              resources:
+                - ingressclasses
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - discovery.k8s.io
+              resources:
+                - endpointslices
+              verbs:
+                - list
+                - watch
+                - get
+          
+          ---
+          # Role for NGINX Ingress
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: nginx-ingress-role
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          rules:
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+                - pods
+                - secrets
+                - namespaces
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              resourceNames:
+                - "ingress-controller-leader"
+              verbs:
+                - get
+                - update
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              verbs:
+                - create
+            - apiGroups:
+                - coordination.k8s.io
+              resources:
+                - leases
+              verbs:
+                - get
+                - create
+                - update
+          
+          ---
+          # ClusterRoleBinding for NGINX Ingress
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: nginx-ingress-clusterrole-nisa-binding
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: nginx-ingress-clusterrole
+          subjects:
+            - kind: ServiceAccount
+              name: nginx-ingress-serviceaccount
+              namespace: ingress-nginx
+          
+          ---
+          # RoleBinding for NGINX Ingress
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: nginx-ingress-role-nisa-binding
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: nginx-ingress-role
+          subjects:
+            - kind: ServiceAccount
+              name: nginx-ingress-serviceaccount
+              namespace: ingress-nginx
+          
+          ---
+          # NGINX Ingress Controller Deployment
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-ingress-controller
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+              app.kubernetes.io/version: "1.8.2"
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: ingress-nginx
+                app.kubernetes.io/part-of: ingress-nginx
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: ingress-nginx
+                  app.kubernetes.io/part-of: ingress-nginx
+                annotations:
+                  prometheus.io/port: "10254"
+                  prometheus.io/scrape: "true"
+              spec:
+                hostNetwork: true
+                serviceAccountName: nginx-ingress-serviceaccount
+                nodeSelector:
+                  ingress-ready: "true"
+                tolerations:
+                  - effect: NoSchedule
+                    key: node-role.kubernetes.io/master
+                    operator: Equal
+                  - effect: NoSchedule
+                    key: node-role.kubernetes.io/control-plane
+                    operator: Equal
+                containers:
+                  - name: nginx-ingress-controller
+                    image: registry.k8s.io/ingress-nginx/controller:v1.8.2@sha256:74834d3d25b336b62cabeb8bf7f1d788706e2cf1cfd64022de4137ade8881ff2
+                    args:
+                      - /nginx-ingress-controller
+                      - --configmap=ingress-nginx/nginx-configuration
+                      - --tcp-services-configmap=ingress-nginx/tcp-services
+                      - --udp-services-configmap=ingress-nginx/udp-services
+                      - --publish-service=ingress-nginx/ingress-nginx-controller
+                      - --annotations-prefix=nginx.ingress.kubernetes.io
+                      - --watch-ingress-without-class=true
+                    securityContext:
+                      allowPrivilegeEscalation: true
+                      capabilities:
+                        add:
+                          - NET_BIND_SERVICE
+                        drop:
+                          - ALL
+                      runAsUser: 101
+                    env:
+                      - name: POD_NAME
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.name
+                      - name: POD_NAMESPACE
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.namespace
+                      - name: LD_PRELOAD
+                        value: /usr/local/lib/libmimalloc.so
+                    ports:
+                      - name: http
+                        containerPort: 80
+                        protocol: TCP
+                        hostPort: 80
+                      - name: https
+                        containerPort: 443
+                        protocol: TCP
+                        hostPort: 443
+                      - name: webhook
+                        containerPort: 8443
+                        protocol: TCP
+                    livenessProbe:
+                      failureThreshold: 3
+                      httpGet:
+                        path: /healthz
+                        port: 10254
+                        scheme: HTTP
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                      successThreshold: 1
+                      timeoutSeconds: 1
+                    readinessProbe:
+                      failureThreshold: 3
+                      httpGet:
+                        path: /healthz
+                        port: 10254
+                        scheme: HTTP
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                      successThreshold: 1
+                      timeoutSeconds: 1
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 90Mi
+          
+          ---
+          # IngressClass
+          apiVersion: networking.k8s.io/v1
+          kind: IngressClass
+          metadata:
+            name: nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+            annotations:
+              ingressclass.kubernetes.io/is-default-class: "true"
+          spec:
+            controller: k8s.io/ingress-nginx
+          
+          ---
+          # Application ConfigMap
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cis-ops-config
+            namespace: cis-ops
+            labels:
+              app: cis-ops
+              component: config
+          data:
+            backend_url: "/api"
+            cors_origin: "*"
+            log_level: "info"
+            node_env: "production"
+            websocket_path: "/socket.io"
+          
+          ---
+          # Backend Deployment
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: cis-ops-backend
             namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+              component: backend
+              version: v1
           spec:
-            replicas: 2
+            replicas: 1
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
             selector:
               matchLabels:
                 app: cis-ops-backend
@@ -154,12 +527,16 @@ jobs:
               metadata:
                 labels:
                   app: cis-ops-backend
+                  component: backend
+                  version: v1
               spec:
                 containers:
                 - name: backend
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
                   ports:
-                  - containerPort: 4000
+                  - name: http
+                    containerPort: 4000
+                    protocol: TCP
                   env:
                   - name: NODE_ENV
                     value: "production"
@@ -167,35 +544,73 @@ jobs:
                     value: "4000"
                   resources:
                     requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
                       memory: "256Mi"
                       cpu: "250m"
-                    limits:
-                      memory: "512Mi"
-                      cpu: "500m"
+                  livenessProbe:
+                    httpGet:
+                      path: /api/metrics
+                      port: http
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: /api/metrics
+                      port: http
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: false
+                    runAsNonRoot: true
+                    runAsUser: 1001
+                securityContext:
+                  fsGroup: 1001
+          
           ---
+          # Backend Service
           apiVersion: v1
           kind: Service
           metadata:
             name: cis-ops-backend-service
             namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+              component: backend
           spec:
+            type: ClusterIP
             selector:
               app: cis-ops-backend
             ports:
-            - port: 4000
-              targetPort: 4000
-            type: ClusterIP
-          EOF
+            - name: http
+              port: 4000
+              targetPort: http
+              protocol: TCP
           
-          # Create Frontend Deployment and Service
-          cat <<EOF > deployment/frontend.yml
+          ---
+          # Frontend Deployment
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: cis-ops-frontend
             namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+              component: frontend
+              version: v1
           spec:
-            replicas: 2
+            replicas: 1
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxUnavailable: 0
+                maxSurge: 1
             selector:
               matchLabels:
                 app: cis-ops-frontend
@@ -203,50 +618,87 @@ jobs:
               metadata:
                 labels:
                   app: cis-ops-frontend
+                  component: frontend
+                  version: v1
               spec:
                 containers:
                 - name: frontend
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
                   ports:
-                  - containerPort: 80
+                  - name: http
+                    containerPort: 80
+                    protocol: TCP
                   resources:
                     requests:
+                      memory: "64Mi"
+                      cpu: "50m"
+                    limits:
                       memory: "128Mi"
                       cpu: "100m"
-                    limits:
-                      memory: "256Mi"
-                      cpu: "200m"
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: http
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
+                  securityContext:
+                    allowPrivilegeEscalation: false
+                    readOnlyRootFilesystem: false
+                    runAsNonRoot: true
+                    runAsUser: 101
+          
           ---
+          # Frontend Service
           apiVersion: v1
           kind: Service
           metadata:
             name: cis-ops-frontend-service
             namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+              component: frontend
           spec:
+            type: ClusterIP
             selector:
               app: cis-ops-frontend
             ports:
-            - port: 80
-              targetPort: 80
-            type: ClusterIP
-          EOF
+            - name: http
+              port: 80
+              targetPort: http
+              protocol: TCP
           
-          # Create Ingress
-          cat <<EOF > deployment/ingress.yml
+          ---
+          # Ingress Resource
           apiVersion: networking.k8s.io/v1
           kind: Ingress
           metadata:
             name: cis-ops-ingress
             namespace: cis-ops
+            labels:
+              app: cis-ops
+              component: ingress
             annotations:
               nginx.ingress.kubernetes.io/rewrite-target: /\$2
               nginx.ingress.kubernetes.io/use-regex: "true"
               nginx.ingress.kubernetes.io/ssl-redirect: "false"
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-body-size: "8m"
               nginx.ingress.kubernetes.io/enable-cors: "true"
               nginx.ingress.kubernetes.io/cors-allow-methods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
               nginx.ingress.kubernetes.io/cors-allow-origin: "*"
               nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
-              nginx.ingress.kubernetes.io/cors-allow-headers: "*"
+              nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
           spec:
             ingressClassName: nginx
             rules:
@@ -280,39 +732,39 @@ jobs:
           #!/bin/bash
           set -e
           
-          echo "🚀 Deploying CIS Operations Dashboard..."
+          echo "🚀 Deploying CIS Operations Dashboard (Complete Manifest)..."
           
-          # Detect cluster type and install appropriate NGINX Ingress Controller
-          if kubectl get nodes -o jsonpath='{.items[0].metadata.name}' | grep -q "kind"; then
-            echo "📦 Detected Kind cluster - Installing NGINX Ingress Controller for Kind..."
-            if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-              kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/kind/deploy.yaml
-              echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-              kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-            fi
-          else
-            echo "📦 Installing NGINX Ingress Controller for cloud..."
-            if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-              kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
-              echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-              kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
-            fi
-          fi
+          # Apply the complete manifest
+          echo "📋 Applying complete Kubernetes manifest..."
+          kubectl apply -f complete-manifest.yaml
           
-          # Apply manifests
-          echo "📋 Applying Kubernetes manifests..."
-          kubectl apply -f namespace.yml
-          kubectl apply -f backend.yml
-          kubectl apply -f frontend.yml
-          kubectl apply -f ingress.yml
+          # Wait for NGINX Ingress Controller
+          echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
+          kubectl wait --namespace ingress-nginx \\
+            --for=condition=ready pod \\
+            --selector=app.kubernetes.io/name=ingress-nginx \\
+            --timeout=300s
           
           # Wait for deployments
-          echo "⏳ Waiting for deployments to be ready..."
+          echo "⏳ Waiting for application deployments to be ready..."
           kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-backend -n cis-ops
           kubectl wait --for=condition=available --timeout=300s deployment/cis-ops-frontend -n cis-ops
           
           echo "✅ Deployment completed successfully!"
-          echo "🌐 Check ingress status: kubectl get ingress -n cis-ops"
+          echo ""
+          echo "📊 Deployment Status:"
+          kubectl get pods -n cis-ops
+          echo ""
+          kubectl get ingress -n cis-ops
+          echo ""
+          echo "🌐 Access your application:"
+          echo "  - Kind cluster: http://localhost"
+          echo "  - Port forward: kubectl port-forward svc/cis-ops-frontend-service 8080:80 -n cis-ops"
+          echo ""
+          echo "🔍 Useful commands:"
+          echo "  kubectl logs -f deployment/cis-ops-backend -n cis-ops"
+          echo "  kubectl logs -f deployment/cis-ops-frontend -n cis-ops"
+          echo "  kubectl get pods -n cis-ops"
           EOF
           
           chmod +x deployment/deploy.sh
@@ -321,19 +773,50 @@ jobs:
         run: |
           git pull origin release || echo "No changes to pull"
           git add deployment/
-          git commit -m "Update k8s manifests for ${{ github.sha }}" || echo "No changes to commit"
+          git commit -m "🚀 Generate complete K8s manifest for ${{ github.sha }}" || echo "No changes to commit"
           git push origin HEAD:${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create deployment summary
         run: |
-          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Complete Deployment Generated" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend Image**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Namespace**: \`cis-ops\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Manifest**: \`deployment/complete-manifest.yaml\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📋 Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. Run: \`bash deployment/deploy.sh\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. Check status: \`kubectl get pods -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. Get ingress IP: \`kubectl get ingress -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Includes:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ NGINX Ingress Controller (Kind & Production compatible)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Complete RBAC setup" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Application deployments and services" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Ingress resource with proper routing" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ ConfigMaps and namespaces" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Deploy with:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "kubectl apply -f deployment/complete-manifest.yaml" >> $GITHUB_STEP_SUMMARY
+          echo "# OR" >> $GITHUB_STEP_SUMMARY
+          echo "bash deployment/deploy.sh" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Kind Cluster Setup:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "# Create Kind cluster with port mappings" >> $GITHUB_STEP_SUMMARY
+          echo "kind create cluster --config=- <<EOF" >> $GITHUB_STEP_SUMMARY
+          echo "kind: Cluster" >> $GITHUB_STEP_SUMMARY
+          echo "apiVersion: kind.x-k8s.io/v1alpha4" >> $GITHUB_STEP_SUMMARY
+          echo "nodes:" >> $GITHUB_STEP_SUMMARY
+          echo "- role: control-plane" >> $GITHUB_STEP_SUMMARY
+          echo "  extraPortMappings:" >> $GITHUB_STEP_SUMMARY
+          echo "  - containerPort: 80" >> $GITHUB_STEP_SUMMARY
+          echo "    hostPort: 80" >> $GITHUB_STEP_SUMMARY
+          echo "  - containerPort: 443" >> $GITHUB_STEP_SUMMARY
+          echo "    hostPort: 443" >> $GITHUB_STEP_SUMMARY
+          echo "  kubeadmConfigPatches:" >> $GITHUB_STEP_SUMMARY
+          echo "  - |" >> $GITHUB_STEP_SUMMARY
+          echo "    kind: InitConfiguration" >> $GITHUB_STEP_SUMMARY
+          echo "    nodeRegistration:" >> $GITHUB_STEP_SUMMARY
+          echo "      kubeletExtraArgs:" >> $GITHUB_STEP_SUMMARY
+          echo "        node-labels: \"ingress-ready=true\"" >> $GITHUB_STEP_SUMMARY
+          echo "EOF" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARYY
