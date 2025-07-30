@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cis-ops-ingress
+  namespace: cis-ops
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  rules:
+  - host: cis-ops.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: cis-ops-backend-service
+            port:
+              number: 4000
+      - path: /socket.io
+        pathType: Prefix
+        backend:
+          service:
+            name: cis-ops-backend-service
+            port:
+              number: 4000
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: cis-ops-frontend-service
+            port:
+              number: 80
