@@ -3,12 +3,21 @@ set -e
 
 echo "🚀 Deploying CIS Operations Dashboard..."
 
-# Check if NGINX Ingress Controller is installed
-if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
-  echo "📦 Installing NGINX Ingress Controller..."
-  kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
-  echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
-  kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+# Detect cluster type and install appropriate NGINX Ingress Controller
+if kubectl get nodes -o jsonpath='{.items[0].metadata.name}' | grep -q "kind"; then
+  echo "📦 Detected Kind cluster - Installing NGINX Ingress Controller for Kind..."
+  if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
+    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/kind/deploy.yaml
+    echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
+    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+  fi
+else
+  echo "📦 Installing NGINX Ingress Controller for cloud..."
+  if ! kubectl get namespace ingress-nginx >/dev/null 2>&1; then
+    kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/cloud/deploy.yaml
+    echo "⏳ Waiting for NGINX Ingress Controller to be ready..."
+    kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=300s
+  fi
 fi
 
 # Apply manifests
