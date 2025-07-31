@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cis-ops-frontend
+  namespace: cis-ops
+  labels:
+    app: cis-ops-frontend
+    version: 465e746a467527b477a5192b023afec1f01155b0
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cis-ops-frontend
+  template:
+    metadata:
+      labels:
+        app: cis-ops-frontend
+        version: 465e746a467527b477a5192b023afec1f01155b0
+    spec:
+      containers:
+      - name: frontend
+        image: docker.io/sayan896/cis-ops-frontend:465e746a467527b477a5192b023afec1f01155b0
+        ports:
+        - containerPort: 80
+          name: http
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3

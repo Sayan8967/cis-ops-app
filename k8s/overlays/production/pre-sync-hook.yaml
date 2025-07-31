@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ensure-ingress-controller
+  namespace: cis-ops
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  template:
+    spec:
+      serviceAccountName: ingress-setup-sa
+      containers:
+      - name: ensure-ingress
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Checking if NGINX Ingress Controller is installed..."
+          
+          # Check if ingress-nginx namespace exists
+          if ! kubectl get namespace ingress-nginx > /dev/null 2>&1; then
+            echo "Installing NGINX Ingress Controller..."
+            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+          else
+            echo "NGINX Ingress Controller namespace exists, checking deployment..."
+          fi
+          
+          # Wait for ingress controller to be ready
+          echo "Waiting for NGINX Ingress Controller to be ready..."
+          kubectl wait --namespace ingress-nginx             --for=condition=ready pod             --selector=app.kubernetes.io/component=controller             --timeout=300s || echo "Timeout waiting for ingress controller, but continuing..."
+          
+          # Check if IngressClass exists, if not create it
+          if ! kubectl get ingressclass nginx > /dev/null 2>&1; then
+            echo "Creating nginx IngressClass..."
+            kubectl apply -f - <<EOL
+          apiVersion: networking.k8s.io/v1
+          kind: IngressClass
+          metadata:
+            name: nginx
+            annotations:
+              ingressclass.kubernetes.io/is-default-class: "true"
+          spec:
+            controller: k8s.io/ingress-nginx
+          EOL
+          fi
+          
+          echo "Ingress controller setup completed!"
+      restartPolicy: Never
+  backoffLimit: 3
