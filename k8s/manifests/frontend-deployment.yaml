@@ -7,7 +7,7 @@ metadata:
     app: cis-ops-frontend
     app.kubernetes.io/name: cis-ops
     app.kubernetes.io/component: frontend
-    app.kubernetes.io/version: aa44530ab6f5fec04e0570feb901474c0f71fd03
+    app.kubernetes.io/version: 684bcba66a9d8c6befb96a207359b02224377d44
     app.kubernetes.io/managed-by: argocd
 spec:
   replicas: 2
@@ -20,14 +20,15 @@ spec:
         app: cis-ops-frontend
         app.kubernetes.io/name: cis-ops
         app.kubernetes.io/component: frontend
-        app.kubernetes.io/version: aa44530ab6f5fec04e0570feb901474c0f71fd03
+        app.kubernetes.io/version: 684bcba66a9d8c6befb96a207359b02224377d44
     spec:
       containers:
       - name: frontend
-        image: docker.io/sayan896/cis-ops-frontend:aa44530ab6f5fec04e0570feb901474c0f71fd03
+        image: docker.io/sayan896/cis-ops-frontend:684bcba66a9d8c6befb96a207359b02224377d44
         ports:
         - containerPort: 80
           name: http
+          protocol: TCP
         resources:
           requests:
             memory: "64Mi"
@@ -39,13 +40,19 @@ spec:
           httpGet:
             path: /
             port: 80
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
           failureThreshold: 3
+          successThreshold: 1
         readinessProbe:
           httpGet:
             path: /
             port: 80
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
           failureThreshold: 3
+          successThreshold: 1

@@ -30,14 +30,14 @@ kubectl get pods -n ingress-nginx
 echo "Testing application health..."
 
 # Get ingress IP
-INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "localhost")
+INGRESS_IP=localhost
 
-if [ "$INGRESS_IP" != "localhost" ]; then
+if [ "" != "localhost" ]; then
   echo "Testing backend health..."
-  curl -f http://$INGRESS_IP/api/health || echo "Backend health check failed"
-  
+  curl -f http:///api/health || echo "Backend health check failed"
+
   echo "Testing frontend..."
-  curl -f http://$INGRESS_IP/ || echo "Frontend check failed"
+  curl -f http:/// || echo "Frontend check failed"
 else
   echo "⚠️  No external IP found, skipping HTTP tests"
 fi
