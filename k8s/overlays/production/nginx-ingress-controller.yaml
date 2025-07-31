@@ -1,0 +1,49 @@
+# This is a reference manifest - ArgoCD will apply this to ensure ingress controller exists
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/instance: ingress-nginx
+---
+# ConfigMap for additional ingress configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-configuration
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/part-of: ingress-nginx
+data:
+  # Enable real IP forwarding
+  use-forwarded-headers: "true"
+  compute-full-forwarded-for: "true"
+  # WebSocket support
+  proxy-read-timeout: "3600"
+  proxy-send-timeout: "3600"
+  # Large client header buffers for OAuth
+  large-client-header-buffers: "4 16k"
+---
+# Service for ingress controller
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-nginx-controller-admission
+  namespace: ingress-nginx
+  labels:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/component: controller
+spec:
+  type: ClusterIP
+  ports:
+    - name: https-webhook
+      port: 443
+      targetPort: 8443
+      appProtocol: https
+  selector:
+    app.kubernetes.io/name: ingress-nginx
+    app.kubernetes.io/instance: ingress-nginx
+    app.kubernetes.io/component: controller
