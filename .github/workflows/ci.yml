@@ -541,13 +541,13 @@ jobs:
           - name: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}
             newTag: ${{ github.sha }}
 
-          commonLabels:
+          labels:
             app.kubernetes.io/name: cis-ops
             app.kubernetes.io/version: ${{ github.sha }}
             app.kubernetes.io/managed-by: argocd
 
           # Patches for production-specific configurations
-          patchesStrategicMerge:
+          patches:
           - |-
             apiVersion: apps/v1
             kind: Deployment
