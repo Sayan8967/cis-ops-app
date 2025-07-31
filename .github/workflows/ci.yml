@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ release ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ release ]
 
 env:
   REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
