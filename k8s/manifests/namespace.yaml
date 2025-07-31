@@ -1,8 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cis-ops
-  labels:
-    name: cis-ops
-    app.kubernetes.io/name: cis-ops
-    app.kubernetes.io/managed-by: argocd

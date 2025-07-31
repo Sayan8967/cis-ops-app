@@ -12,7 +12,6 @@ env:
   FRONTEND_IMAGE: cis-ops-frontend
 
 jobs:
-  # Build and test backend
   build-backend:
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +30,6 @@ jobs:
         working-directory: ./backend
         run: npm run build --if-present
 
-  # Build and test frontend
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +51,6 @@ jobs:
           REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
           REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
 
-  # Build and push backend Docker image
   docker-backend:
     needs: build-backend
     runs-on: ubuntu-latest
@@ -79,7 +76,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Build and push frontend Docker image
   docker-frontend:
     needs: build-frontend
     runs-on: ubuntu-latest
@@ -108,7 +104,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Security scan for backend image
   trivy-scan-backend:
     needs: docker-backend
     runs-on: ubuntu-latest
@@ -125,7 +120,6 @@ jobs:
         with:
           sarif_file: 'trivy-backend-results.sarif'
 
-  # Security scan for frontend image
   trivy-scan-frontend:
     needs: docker-frontend
     runs-on: ubuntu-latest
@@ -142,7 +136,6 @@ jobs:
         with:
           sarif_file: 'trivy-frontend-results.sarif'
 
-  # Generate and commit plain Kubernetes manifests (NO KUSTOMIZE)
   k8s-manifest:
     needs: [trivy-scan-backend, trivy-scan-frontend]
     runs-on: ubuntu-latest
@@ -157,10 +150,10 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
       - name: Create deployment directory
         run: mkdir -p k8s/manifests
-      - name: Generate Plain Kubernetes Manifests
+      - name: Generate Kubernetes Manifests
         run: |
-          # Create namespace
-          cat <<EOF > k8s/manifests/namespace.yaml
+          # Namespace
+          cat > k8s/manifests/namespace.yaml << 'EOF'
           apiVersion: v1
           kind: Namespace
           metadata:
@@ -171,8 +164,8 @@ jobs:
               app.kubernetes.io/managed-by: argocd
           EOF
 
-          # Create backend deployment
-          cat <<EOF > k8s/manifests/backend-deployment.yaml
+          # Backend Deployment
+          cat > k8s/manifests/backend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -182,7 +175,6 @@ jobs:
               app: cis-ops-backend
               app.kubernetes.io/name: cis-ops
               app.kubernetes.io/component: backend
-              app.kubernetes.io/version: latest
               app.kubernetes.io/managed-by: argocd
           spec:
             replicas: 2
@@ -195,15 +187,13 @@ jobs:
                   app: cis-ops-backend
                   app.kubernetes.io/name: cis-ops
                   app.kubernetes.io/component: backend
-                  app.kubernetes.io/version: latest
               spec:
                 containers:
                 - name: backend
-                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+                  image: IMAGE_PLACEHOLDER
                   ports:
                   - containerPort: 4000
                     name: http
-                    protocol: TCP
                   env:
                   - name: NODE_ENV
                     value: "production"
@@ -218,40 +208,10 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
-                  livenessProbe:
-                    httpGet:
-                      path: /api/health
-                      port: 4000
-                      scheme: HTTP
-                    initialDelaySeconds: 60
-                    periodSeconds: 30
-                    timeoutSeconds: 10
-                    failureThreshold: 3
-                    successThreshold: 1
-                  readinessProbe:
-                    httpGet:
-                      path: /api/health
-                      port: 4000
-                      scheme: HTTP
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
-                    timeoutSeconds: 5
-                    failureThreshold: 3
-                    successThreshold: 1
-                  startupProbe:
-                    httpGet:
-                      path: /api/health
-                      port: 4000
-                      scheme: HTTP
-                    initialDelaySeconds: 10
-                    periodSeconds: 5
-                    timeoutSeconds: 3
-                    failureThreshold: 30
-                    successThreshold: 1
           EOF
 
-          # Create frontend deployment
-          cat <<EOF > k8s/manifests/frontend-deployment.yaml
+          # Frontend Deployment
+          cat > k8s/manifests/frontend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -261,7 +221,6 @@ jobs:
               app: cis-ops-frontend
               app.kubernetes.io/name: cis-ops
               app.kubernetes.io/component: frontend
-              app.kubernetes.io/version: ${{ github.sha }}
               app.kubernetes.io/managed-by: argocd
           spec:
             replicas: 2
@@ -274,15 +233,13 @@ jobs:
                   app: cis-ops-frontend
                   app.kubernetes.io/name: cis-ops
                   app.kubernetes.io/component: frontend
-                  app.kubernetes.io/version: ${{ github.sha }}
               spec:
                 containers:
                 - name: frontend
-                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+                  image: IMAGE_PLACEHOLDER
                   ports:
                   - containerPort: 80
                     name: http
-                    protocol: TCP
                   resources:
                     requests:
                       memory: "64Mi"
@@ -290,30 +247,10 @@ jobs:
                     limits:
                       memory: "256Mi"
                       cpu: "200m"
-                  livenessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                      scheme: HTTP
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
-                    timeoutSeconds: 5
-                    failureThreshold: 3
-                    successThreshold: 1
-                  readinessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                      scheme: HTTP
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
-                    timeoutSeconds: 3
-                    failureThreshold: 3
-                    successThreshold: 1
           EOF
 
-          # Create backend service
-          cat <<EOF > k8s/manifests/backend-service.yaml
+          # Backend LoadBalancer Service
+          cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -325,6 +262,7 @@ jobs:
               app.kubernetes.io/component: backend
               app.kubernetes.io/managed-by: argocd
           spec:
+            type: LoadBalancer
             selector:
               app: cis-ops-backend
             ports:
@@ -332,11 +270,10 @@ jobs:
               port: 4000
               targetPort: 4000
               protocol: TCP
-            type: ClusterIP
           EOF
 
-          # Create frontend service
-          cat <<EOF > k8s/manifests/frontend-service.yaml
+          # Frontend LoadBalancer Service
+          cat > k8s/manifests/frontend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -348,6 +285,7 @@ jobs:
               app.kubernetes.io/component: frontend
               app.kubernetes.io/managed-by: argocd
           spec:
+            type: LoadBalancer
             selector:
               app: cis-ops-frontend
             ports:
@@ -355,119 +293,10 @@ jobs:
               port: 80
               targetPort: 80
               protocol: TCP
-            type: ClusterIP
           EOF
 
-          # Create ingress
-          cat <<EOF > k8s/manifests/ingress.yaml
-          apiVersion: networking.k8s.io/v1
-          kind: Ingress
-          metadata:
-            name: cis-ops-ingress
-            namespace: cis-ops
-            labels:
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/managed-by: argocd
-            annotations:
-              kubernetes.io/ingress.class: nginx
-              nginx.ingress.kubernetes.io/rewrite-target: /$2
-              nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
-              nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-              nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
-              nginx.ingress.kubernetes.io/configuration-snippet: |
-                proxy_set_header Upgrade $http_upgrade;
-                proxy_set_header Connection "upgrade";
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-              nginx.ingress.kubernetes.io/enable-cors: "true"
-              nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
-              nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
-          spec:
-            ingressClassName: nginx
-            rules:
-            - http:
-                paths:
-                - path: /api(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
-                - path: /socket.io(/|$)(.*)
-                  pathType: ImplementationSpecific
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
-                - path: /
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: cis-ops-frontend-service
-                      port:
-                        number: 80
-          EOF
-
-          # Create validation script
-          cat <<EOF > k8s/manifests/validate.sh
-          #!/bin/bash
-
-          echo "🔍 Validating CIS-OPS Deployment..."
-
-          # Check namespace
-          echo "Checking namespace..."
-          kubectl get namespace cis-ops
-
-          # Check deployments
-          echo "Checking deployments..."
-          kubectl get deployments -n cis-ops
-
-          # Check pods
-          echo "Checking pods..."
-          kubectl get pods -n cis-ops
-
-          # Check services
-          echo "Checking services..."
-          kubectl get services -n cis-ops
-
-          # Check ingress
-          echo "Checking ingress..."
-          kubectl get ingress -n cis-ops
-
-          # Check ingress controller
-          echo "Checking ingress controller..."
-          kubectl get pods -n ingress-nginx
-
-          # Test health endpoints
-          echo "Testing application health..."
-
-          # Get ingress IP
-          INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "localhost")
-
-          if [ "$INGRESS_IP" != "localhost" ]; then
-            echo "Testing backend health..."
-            curl -f http://$INGRESS_IP/api/health || echo "Backend health check failed"
-
-            echo "Testing frontend..."
-            curl -f http://$INGRESS_IP/ || echo "Frontend check failed"
-          else
-            echo "⚠️  No external IP found, skipping HTTP tests"
-          fi
-
-          echo "✅ Validation completed!"
-          EOF
-
-          chmod +x k8s/manifests/validate.sh
-
-          # Create ArgoCD Application
-          cat <<EOF > k8s/argocd-application.yaml
+          # ArgoCD Application
+          cat > k8s/argocd-application.yaml << 'EOF'
           apiVersion: argoproj.io/v1alpha1
           kind: Application
           metadata:
@@ -478,8 +307,8 @@ jobs:
           spec:
             project: default
             source:
-              repoURL: ${{ github.server_url }}/${{ github.repository }}
-              targetRevision: ${{ github.ref_name }}
+              repoURL: REPO_URL_PLACEHOLDER
+              targetRevision: BRANCH_PLACEHOLDER
               path: k8s/manifests
             destination:
               server: https://kubernetes.default.svc
@@ -491,66 +320,34 @@ jobs:
                 allowEmpty: false
               syncOptions:
               - CreateNamespace=true
-              - PrunePropagationPolicy=foreground
-              - PruneLast=true
-              retry:
-                limit: 5
-                backoff:
-                  duration: 5s
-                  factor: 2
-                  maxDuration: 3m
           EOF
+
+          # Replace placeholders
+          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
+          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
+          sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
+          sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
+
       - name: Commit and push manifests
         run: |
           git add k8s/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "🚀 Update Kubernetes manifests (NO KUSTOMIZE) for commit ${{ github.sha }}
-
-            Backend Image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-            Frontend Image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-
-            Changes:
-            - Plain Kubernetes manifests (removed kustomize)
-            - Direct image tags with commit SHA
-            - Enhanced ingress configuration
-            - Improved health checks and resource limits
-            - Added validation script
-
-            Auto-generated by GitHub Actions"
+            git commit -m "🚀 Update K8s manifests with LoadBalancer services - ${{ github.sha }}"
             git push origin HEAD:${{ github.ref_name }}
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create deployment summary
         run: |
-          echo "## 🚀 Deployment Summary (No Kustomize)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Docker Images Built:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Backend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Kubernetes Manifests:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Generated plain YAML manifests in \`k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ No kustomize required - direct Kubernetes YAML" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Image tags updated with commit SHA" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Enhanced ingress with WebSocket support" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ ArgoCD Application manifest created" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Validation script included" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### File Structure:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/namespace.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/backend-deployment.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/frontend-deployment.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/backend-service.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/frontend-service.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/ingress.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/manifests/validate.sh\`" >> $GITHUB_STEP_SUMMARY
-          echo "- \`k8s/argocd-application.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "1. 🔧 Install NGINX Ingress Controller manually first" >> $GITHUB_STEP_SUMMARY
-          echo "2. 🔄 Create ArgoCD application pointing to \`k8s/manifests\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. 🔍 Monitor deployment in ArgoCD UI" >> $GITHUB_STEP_SUMMARY
-          echo "4. ✅ Run validation: \`./k8s/manifests/validate.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 LoadBalancer Deployment Ready" >> $GITHUB_STEP_SUMMARY
+          echo "### Images:" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Services:" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: LoadBalancer on port 80" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: LoadBalancer on port 4000" >> $GITHUB_STEP_SUMMARY
+          echo "### Deploy:" >> $GITHUB_STEP_SUMMARY
+          echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
