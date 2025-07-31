@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ release ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ release ]
+    branches: [ master, main ]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -327,7 +327,7 @@ jobs:
             type: ClusterIP
           EOF
 
-          # Create ingress
+          # Create ingress (based on working Azure setup)
           cat <<EOF > k8s/overlays/production/ingress.yaml
           apiVersion: networking.k8s.io/v1
           kind: Ingress
@@ -335,11 +335,11 @@ jobs:
             name: cis-ops-ingress
             namespace: cis-ops
             annotations:
-              nginx.ingress.kubernetes.io/rewrite-target: /
+              nginx.ingress.kubernetes.io/rewrite-target: "/\$2"
               nginx.ingress.kubernetes.io/use-regex: "true"
-              nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
-              nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
-              nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
               nginx.ingress.kubernetes.io/proxy-body-size: "10m"
               # Enable WebSocket support for socket.io
               nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
@@ -349,23 +349,9 @@ jobs:
           spec:
             ingressClassName: nginx
             rules:
-            - host: ${{ secrets.APP_DOMAIN || 'cis-ops.local' }}
-              http:
+            - http:
                 paths:
-                - path: /api
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
-                - path: /socket.io
-                  pathType: Prefix
-                  backend:
-                    service:
-                      name: cis-ops-backend-service
-                      port:
-                        number: 4000
+                # Frontend - serve from root
                 - path: /
                   pathType: Prefix
                   backend:
@@ -373,8 +359,37 @@ jobs:
                       name: cis-ops-frontend-service
                       port:
                         number: 80
+                # Backend API - with regex rewrite
+                - path: /api(/|\$)(.*)
+                  pathType: ImplementationSpecific
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                # Socket.IO - with regex rewrite
+                - path: /socket.io(/|\$)(.*)
+                  pathType: ImplementationSpecific
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
           EOF
 
+          # Create NGINX Ingress Controller setup
+          cat <<EOF > k8s/overlays/production/nginx-ingress-setup.yaml
+          # NGINX Ingress Controller Installation
+          # Apply this first: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nginx-ingress-tcp-microk8s-conf
+            namespace: ingress-nginx
+          data:
+            "4000": "cis-ops/cis-ops-backend-service:4000"
+          EOF
           # Create kustomization file
           cat <<EOF > k8s/overlays/production/kustomization.yaml
           apiVersion: kustomize.config.k8s.io/v1beta1
@@ -389,6 +404,7 @@ jobs:
           - backend-service.yaml
           - frontend-service.yaml
           - ingress.yaml
+          - nginx-ingress-setup.yaml
 
           images:
           - name: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}
