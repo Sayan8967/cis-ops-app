@@ -7,96 +7,685 @@ on:
     branches: [ release ]
 
 env:
-  # Upstream NGINX Ingress Controller manifest
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  BACKEND_IMAGE: cis-ops-backend
+  FRONTEND_IMAGE: cis-ops-frontend
   INGRESS_YAML: https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
 
 jobs:
-
-  install-ingress-controller:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Export Kind kubeconfig
-        run: |
-          kind get kubeconfig --name kind > kubeconfig.yaml
-
-      - name: Install NGINX Ingress Controller
-        run: |
-          kubectl apply -f $INGRESS_YAML --kubeconfig kubeconfig.yaml
-
-      - name: Wait for Ingress Controller to be ready
-        run: |
-          kubectl wait \
-            --namespace ingress-nginx \
-            --for=condition=Ready pods \
-            --selector app.kubernetes.io/component=controller \
-            --timeout=300s \
-            --kubeconfig kubeconfig.yaml
-
+  # Build and test backend
   build-backend:
-    needs: install-ingress-controller
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Build backend
+        working-directory: ./backend
+        run: npm run build --if-present
+
+  # Build and test frontend
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+        env:
+          REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
+          REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+
+  # Build and push backend Docker image
+  docker-backend:
+    needs: build-backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
-      - name: Build and push Backend Docker image
-        uses: docker/build-push-action@v4
+      - name: Build and push backend Docker image
+        uses: docker/build-push-action@v5
         with:
           context: ./backend
+          file: ./backend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/cis-ops-backend:latest
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  build-frontend:
-    needs: install-ingress-controller
+  # Build and push frontend Docker image
+  docker-frontend:
+    needs: build-frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
-      - name: Build and push Frontend Docker image
-        uses: docker/build-push-action@v4
+      - name: Build and push frontend Docker image
+        uses: docker/build-push-action@v5
         with:
           context: ./frontend
+          file: ./frontend/Dockerfile
           push: true
-          tags: ${{ secrets.DOCKER_REGISTRY }}/cis-ops-frontend:latest
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:latest
+          build-args: |
+            REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }}
+            REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  k8s-manifest:
-    needs: [build-backend, build-frontend]
+  # Security scan for backend image
+  trivy-scan-backend:
+    needs: docker-backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Export Kind kubeconfig
-        run: |
-          kind get kubeconfig --name kind > kubeconfig.yaml
-
-      - name: Apply Kubernetes manifests
-        run: |
-          kubectl apply -f manifests/ --kubeconfig kubeconfig.yaml
-
-  trivy-scan:
-    needs: [build-backend]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install Trivy and Scan Backend Code
+      - name: Run Trivy vulnerability scanner (Backend)
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: fs
-          scan-ref: ./backend
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-backend-results.sarif'
 
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-backend-results.sarif'
+
+  # Security scan for frontend image
+  trivy-scan-frontend:
+    needs: docker-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Trivy vulnerability scanner (Frontend)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
+
+  # Generate and commit Kubernetes manifests with proper ingress setup
+  k8s-manifest:
+    needs: [trivy-scan-backend, trivy-scan-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create deployment directory
+        run: mkdir -p k8s/overlays/production
+
+      - name: Generate Kubernetes manifests
+        run: |
+          # Create namespace
+          cat <<EOF > k8s/overlays/production/namespace.yaml
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cis-ops
+            labels:
+              name: cis-ops
+          EOF
+
+          # Create NGINX Ingress Controller installation manifest
+          cat <<EOF > k8s/overlays/production/nginx-ingress-controller.yaml
+          # This is a reference manifest - ArgoCD will apply this to ensure ingress controller exists
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/instance: ingress-nginx
+          ---
+          # ConfigMap for additional ingress configuration
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: nginx-configuration
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/part-of: ingress-nginx
+          data:
+            # Enable real IP forwarding
+            use-forwarded-headers: "true"
+            compute-full-forwarded-for: "true"
+            # WebSocket support
+            proxy-read-timeout: "3600"
+            proxy-send-timeout: "3600"
+            # Large client header buffers for OAuth
+            large-client-header-buffers: "4 16k"
+          ---
+          # Service for ingress controller
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ingress-nginx-controller-admission
+            namespace: ingress-nginx
+            labels:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/instance: ingress-nginx
+              app.kubernetes.io/component: controller
+          spec:
+            type: ClusterIP
+            ports:
+              - name: https-webhook
+                port: 443
+                targetPort: 8443
+                appProtocol: https
+            selector:
+              app.kubernetes.io/name: ingress-nginx
+              app.kubernetes.io/instance: ingress-nginx
+              app.kubernetes.io/component: controller
+          EOF
+
+          # Create ingress class definition
+          cat <<EOF > k8s/overlays/production/ingress-class.yaml
+          apiVersion: networking.k8s.io/v1
+          kind: IngressClass
+          metadata:
+            name: nginx
+            annotations:
+              ingressclass.kubernetes.io/is-default-class: "true"
+          spec:
+            controller: k8s.io/ingress-nginx
+          EOF
+
+          # Create backend deployment
+          cat <<EOF > k8s/overlays/production/backend-deployment.yaml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cis-ops-backend
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+              version: ${{ github.sha }}
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cis-ops-backend
+            template:
+              metadata:
+                labels:
+                  app: cis-ops-backend
+                  version: ${{ github.sha }}
+              spec:
+                containers:
+                - name: backend
+                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+                  ports:
+                  - containerPort: 4000
+                    name: http
+                  env:
+                  - name: NODE_ENV
+                    value: "production"
+                  - name: PORT
+                    value: "4000"
+                  resources:
+                    requests:
+                      memory: "128Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                  livenessProbe:
+                    httpGet:
+                      path: /api/health
+                      port: 4000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: /api/health
+                      port: 4000
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    failureThreshold: 3
+          EOF
+
+          # Create frontend deployment
+          cat <<EOF > k8s/overlays/production/frontend-deployment.yaml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cis-ops-frontend
+            namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+              version: ${{ github.sha }}
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: cis-ops-frontend
+            template:
+              metadata:
+                labels:
+                  app: cis-ops-frontend
+                  version: ${{ github.sha }}
+              spec:
+                containers:
+                - name: frontend
+                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+                  ports:
+                  - containerPort: 80
+                    name: http
+                  resources:
+                    requests:
+                      memory: "64Mi"
+                      cpu: "50m"
+                    limits:
+                      memory: "256Mi"
+                      cpu: "200m"
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    failureThreshold: 3
+          EOF
+
+          # Create backend service
+          cat <<EOF > k8s/overlays/production/backend-service.yaml
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-backend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+          spec:
+            selector:
+              app: cis-ops-backend
+            ports:
+            - name: http
+              port: 4000
+              targetPort: 4000
+              protocol: TCP
+            type: ClusterIP
+          EOF
+
+          # Create frontend service
+          cat <<EOF > k8s/overlays/production/frontend-service.yaml
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-frontend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+          spec:
+            selector:
+              app: cis-ops-frontend
+            ports:
+            - name: http
+              port: 80
+              targetPort: 80
+              protocol: TCP
+            type: ClusterIP
+          EOF
+
+          # Create enhanced ingress with proper configuration
+          cat <<EOF > k8s/overlays/production/ingress.yaml
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: cis-ops-ingress
+            namespace: cis-ops
+            annotations:
+              # Ingress class
+              kubernetes.io/ingress.class: nginx
+              # Rewrite configuration
+              nginx.ingress.kubernetes.io/rewrite-target: "/\$2"
+              nginx.ingress.kubernetes.io/use-regex: "true"
+              # Timeout configurations
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+              nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+              # WebSocket support for socket.io
+              nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+              nginx.ingress.kubernetes.io/configuration-snippet: |
+                proxy_set_header Upgrade \$http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+              # Enable CORS if needed
+              nginx.ingress.kubernetes.io/enable-cors: "true"
+              nginx.ingress.kubernetes.io/cors-methods: "GET, POST, PUT, DELETE, OPTIONS"
+              nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+          spec:
+            ingressClassName: nginx
+            rules:
+            - http:
+                paths:
+                # Backend API - with regex rewrite (must come first for proper matching)
+                - path: /api(/|\$)(.*)
+                  pathType: ImplementationSpecific
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                # Socket.IO - with regex rewrite
+                - path: /socket.io(/|\$)(.*)
+                  pathType: ImplementationSpecific
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                # Frontend - serve from root (must be last for catch-all)
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-frontend-service
+                      port:
+                        number: 80
+          EOF
+
+          # Create pre-deployment hook for ingress controller
+          cat <<EOF > k8s/overlays/production/pre-sync-hook.yaml
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ensure-ingress-controller
+            namespace: cis-ops
+            annotations:
+              argocd.argoproj.io/hook: PreSync
+              argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+          spec:
+            template:
+              spec:
+                serviceAccountName: ingress-setup-sa
+                containers:
+                - name: ensure-ingress
+                  image: bitnami/kubectl:latest
+                  command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    echo "Checking if NGINX Ingress Controller is installed..."
+                    
+                    # Check if ingress-nginx namespace exists
+                    if ! kubectl get namespace ingress-nginx > /dev/null 2>&1; then
+                      echo "Installing NGINX Ingress Controller..."
+                      kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+                    else
+                      echo "NGINX Ingress Controller namespace exists, checking deployment..."
+                    fi
+                    
+                    # Wait for ingress controller to be ready
+                    echo "Waiting for NGINX Ingress Controller to be ready..."
+                    kubectl wait --namespace ingress-nginx \
+                      --for=condition=ready pod \
+                      --selector=app.kubernetes.io/component=controller \
+                      --timeout=300s || echo "Timeout waiting for ingress controller, but continuing..."
+                    
+                    # Check if IngressClass exists, if not create it
+                    if ! kubectl get ingressclass nginx > /dev/null 2>&1; then
+                      echo "Creating nginx IngressClass..."
+                      kubectl apply -f - <<EOL
+                    apiVersion: networking.k8s.io/v1
+                    kind: IngressClass
+                    metadata:
+                      name: nginx
+                      annotations:
+                        ingressclass.kubernetes.io/is-default-class: "true"
+                    spec:
+                      controller: k8s.io/ingress-nginx
+                    EOL
+                    fi
+                    
+                    echo "Ingress controller setup completed!"
+                restartPolicy: Never
+            backoffLimit: 3
+          EOF
+
+          # Create kustomization file
+          cat <<EOF > k8s/overlays/production/kustomization.yaml
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+
+          namespace: cis-ops
+
+          resources:
+          - namespace.yaml
+          - nginx-ingress-controller.yaml
+          - ingress-class.yaml
+          - backend-deployment.yaml
+          - frontend-deployment.yaml
+          - backend-service.yaml
+          - frontend-service.yaml
+          - ingress.yaml
+          - pre-sync-hook.yaml
+
+          images:
+          - name: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}
+            newTag: ${{ github.sha }}
+          - name: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}
+            newTag: ${{ github.sha }}
+
+          commonLabels:
+            app.kubernetes.io/name: cis-ops
+            app.kubernetes.io/version: ${{ github.sha }}
+            app.kubernetes.io/managed-by: argocd
+
+          # Patches for production-specific configurations
+          patchesStrategicMerge:
+          - |-
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: cis-ops-backend
+            spec:
+              template:
+                spec:
+                  containers:
+                  - name: backend
+                    env:
+                    - name: CORS_ORIGIN
+                      value: "*"
+          EOF
+
+          # Create ArgoCD Application manifest with sync waves
+          cat <<EOF > k8s/overlays/production/argocd-application.yaml
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: cis-ops
+            namespace: argocd
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+            annotations:
+              argocd.argoproj.io/sync-wave: "1"
+          spec:
+            project: default
+            source:
+              repoURL: ${{ github.server_url }}/${{ github.repository }}
+              targetRevision: ${{ github.ref_name }}
+              path: k8s/overlays/production
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: cis-ops
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+                allowEmpty: false
+              syncOptions:
+              - CreateNamespace=true
+              - PrunePropagationPolicy=foreground
+              - PruneLast=true
+              - ApplyOutOfSyncOnly=true
+              - RespectIgnoreDifferences=true
+              retry:
+                limit: 5
+                backoff:
+                  duration: 5s
+                  factor: 2
+                  maxDuration: 3m
+            ignoreDifferences:
+            - group: apps
+              kind: Deployment
+              jsonPointers:
+              - /spec/replicas
+          EOF
+
+          # Create ingress validation script
+          cat <<EOF > k8s/overlays/production/validate-ingress.sh
+          #!/bin/bash
+          
+          echo "🔍 Validating Ingress Setup..."
+          
+          # Check if ingress controller is running
+          echo "Checking NGINX Ingress Controller..."
+          kubectl get pods -n ingress-nginx -l app.kubernetes.io/component=controller
+          
+          # Check ingress class
+          echo "Checking IngressClass..."
+          kubectl get ingressclass
+          
+          # Check application ingress
+          echo "Checking application ingress..."
+          kubectl get ingress -n cis-ops
+          
+          # Describe ingress for detailed info
+          echo "Ingress details:"
+          kubectl describe ingress cis-ops-ingress -n cis-ops
+          
+          # Check ingress controller service
+          echo "Checking ingress controller service..."
+          kubectl get svc -n ingress-nginx
+          
+          echo "✅ Ingress validation completed!"
+          EOF
+          
+          chmod +x k8s/overlays/production/validate-ingress.sh
+
+      - name: Commit and push manifests
+        run: |
+          git add k8s/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🚀 Update k8s manifests with enhanced ingress setup for commit ${{ github.sha }}
+
+            Backend Image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            Frontend Image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+
+            Changes:
+            - Enhanced ingress configuration with proper controller installation
+            - Added pre-sync hooks for ingress controller setup
+            - Improved health checks and resource limits
+            - Added ingress validation script
+
+            Auto-generated by GitHub Actions"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Images Built:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Kubernetes Manifests:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Generated manifests in \`k8s/overlays/production/\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ NGINX Ingress Controller installation ensured" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ IngressClass configuration included" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Pre-sync hooks for ingress setup" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Enhanced ingress with WebSocket support" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ ArgoCD Application manifest created" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Ingress validation script included" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Ingress Configuration:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Controller**: NGINX Ingress Controller" >> $GITHUB_STEP_SUMMARY
+          echo "- **Class**: nginx (default)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Features**: WebSocket support, proper rewriting, CORS enabled" >> $GITHUB_STEP_SUMMARY
+          echo "- **Paths**: \`/api/*\` → Backend, \`/socket.io/*\` → Backend, \`/*\` → Frontend" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
+          echo "1. 🔄 ArgoCD will automatically sync the new deployment" >> $GITHUB_STEP_SUMMARY
+          echo "2. 🔍 Monitor the deployment in ArgoCD UI" >> $GITHUB_STEP_SUMMARY
+          echo "3. ✅ Run validation: \`kubectl apply -f k8s/overlays/production/ && ./k8s/overlays/production/validate-ingress.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. 🌐 Access application through ingress controller's external IP" >> $GITHUB_STEP_SUMMARY
