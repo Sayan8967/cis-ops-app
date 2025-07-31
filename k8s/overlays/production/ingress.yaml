@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cis-ops-ingress
+  namespace: cis-ops
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: "/$2"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # Enable WebSocket support for socket.io
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      # Frontend - serve from root
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: cis-ops-frontend-service
+            port:
+              number: 80
+      # Backend API - with regex rewrite
+      - path: /api(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: cis-ops-backend-service
+            port:
+              number: 4000
+      # Socket.IO - with regex rewrite
+      - path: /socket.io(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: cis-ops-backend-service
+            port:
+              number: 4000

@@ -1,0 +1,24 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cis-ops
+
+resources:
+- namespace.yaml
+- backend-deployment.yaml
+- frontend-deployment.yaml
+- backend-service.yaml
+- frontend-service.yaml
+- ingress.yaml
+- nginx-ingress-setup.yaml
+
+images:
+- name: docker.io/sayan896/cis-ops-backend
+  newTag: 9a87a00b5f6dd9084a4e4a68e360c35ae446ff42
+- name: docker.io/sayan896/cis-ops-frontend
+  newTag: 9a87a00b5f6dd9084a4e4a68e360c35ae446ff42
+
+commonLabels:
+  app.kubernetes.io/name: cis-ops
+  app.kubernetes.io/version: 9a87a00b5f6dd9084a4e4a68e360c35ae446ff42
+  app.kubernetes.io/managed-by: argocd
