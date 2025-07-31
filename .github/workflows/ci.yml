@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ release ]
+    branches: [release]
   pull_request:
-    branches: [ release ]
+    branches: [release]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -18,18 +18,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
-
       - name: Install backend dependencies
         working-directory: ./backend
         run: npm ci
-
       - name: Build backend
         working-directory: ./backend
         run: npm run build --if-present
@@ -40,18 +37,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend dependencies
         working-directory: ./frontend
         run: npm ci
-
       - name: Build frontend
         working-directory: ./frontend
         run: npm run build
@@ -66,16 +60,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
-
       - name: Build and push backend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -95,16 +86,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
-
       - name: Build and push frontend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -131,7 +119,6 @@ jobs:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-backend-results.sarif'
-
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -149,7 +136,6 @@ jobs:
           image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-frontend-results.sarif'
-
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -165,15 +151,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Create deployment directory
         run: mkdir -p k8s/manifests
-
       - name: Generate Plain Kubernetes Manifests
         run: |
           # Create namespace
@@ -199,7 +182,7 @@ jobs:
               app: cis-ops-backend
               app.kubernetes.io/name: cis-ops
               app.kubernetes.io/component: backend
-              app.kubernetes.io/version: ${{ github.sha }}
+              app.kubernetes.io/version: latest
               app.kubernetes.io/managed-by: argocd
           spec:
             replicas: 2
@@ -212,7 +195,7 @@ jobs:
                   app: cis-ops-backend
                   app.kubernetes.io/name: cis-ops
                   app.kubernetes.io/component: backend
-                  app.kubernetes.io/version: ${{ github.sha }}
+                  app.kubernetes.io/version: latest
               spec:
                 containers:
                 - name: backend
@@ -220,6 +203,7 @@ jobs:
                   ports:
                   - containerPort: 4000
                     name: http
+                    protocol: TCP
                   env:
                   - name: NODE_ENV
                     value: "production"
@@ -238,16 +222,32 @@ jobs:
                     httpGet:
                       path: /api/health
                       port: 4000
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
+                      scheme: HTTP
+                    initialDelaySeconds: 60
+                    periodSeconds: 30
+                    timeoutSeconds: 10
                     failureThreshold: 3
+                    successThreshold: 1
                   readinessProbe:
                     httpGet:
                       path: /api/health
                       port: 4000
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
+                      scheme: HTTP
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    timeoutSeconds: 5
                     failureThreshold: 3
+                    successThreshold: 1
+                  startupProbe:
+                    httpGet:
+                      path: /api/health
+                      port: 4000
+                      scheme: HTTP
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 30
+                    successThreshold: 1
           EOF
 
           # Create frontend deployment
@@ -282,6 +282,7 @@ jobs:
                   ports:
                   - containerPort: 80
                     name: http
+                    protocol: TCP
                   resources:
                     requests:
                       memory: "64Mi"
@@ -293,16 +294,22 @@ jobs:
                     httpGet:
                       path: /
                       port: 80
+                      scheme: HTTP
                     initialDelaySeconds: 30
                     periodSeconds: 10
+                    timeoutSeconds: 5
                     failureThreshold: 3
+                    successThreshold: 1
                   readinessProbe:
                     httpGet:
                       path: /
                       port: 80
+                      scheme: HTTP
                     initialDelaySeconds: 5
                     periodSeconds: 5
+                    timeoutSeconds: 3
                     failureThreshold: 3
+                    successThreshold: 1
           EOF
 
           # Create backend service
@@ -362,35 +369,29 @@ jobs:
               app.kubernetes.io/name: cis-ops
               app.kubernetes.io/managed-by: argocd
             annotations:
-              # Use nginx ingress class
               kubernetes.io/ingress.class: nginx
-              # Rewrite configuration for API paths
-              nginx.ingress.kubernetes.io/rewrite-target: /\$2
+              nginx.ingress.kubernetes.io/rewrite-target: /$2
               nginx.ingress.kubernetes.io/use-regex: "true"
-              # Timeout configurations
               nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
               nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
               nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
               nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-              # WebSocket support for socket.io
               nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
               nginx.ingress.kubernetes.io/configuration-snippet: |
-                proxy_set_header Upgrade \$http_upgrade;
+                proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection "upgrade";
-                proxy_set_header Host \$host;
-                proxy_set_header X-Real-IP \$remote_addr;
-                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto \$scheme;
-              # Enable CORS
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
               nginx.ingress.kubernetes.io/enable-cors: "true"
-              nginx.ingress.kubernetes.io/cors-methods: "GET, POST, PUT, DELETE, OPTIONS"
+              nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
               nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
           spec:
             ingressClassName: nginx
             rules:
             - http:
                 paths:
-                # Backend API paths (must come first for proper matching)
                 - path: /api(/|$)(.*)
                   pathType: ImplementationSpecific
                   backend:
@@ -398,7 +399,6 @@ jobs:
                       name: cis-ops-backend-service
                       port:
                         number: 4000
-                # Socket.IO paths
                 - path: /socket.io(/|$)(.*)
                   pathType: ImplementationSpecific
                   backend:
@@ -406,7 +406,6 @@ jobs:
                       name: cis-ops-backend-service
                       port:
                         number: 4000
-                # Frontend - catch all (must be last)
                 - path: /
                   pathType: Prefix
                   backend:
@@ -419,55 +418,55 @@ jobs:
           # Create validation script
           cat <<EOF > k8s/manifests/validate.sh
           #!/bin/bash
-          
+
           echo "🔍 Validating CIS-OPS Deployment..."
-          
+
           # Check namespace
           echo "Checking namespace..."
           kubectl get namespace cis-ops
-          
+
           # Check deployments
           echo "Checking deployments..."
           kubectl get deployments -n cis-ops
-          
+
           # Check pods
           echo "Checking pods..."
           kubectl get pods -n cis-ops
-          
+
           # Check services
           echo "Checking services..."
           kubectl get services -n cis-ops
-          
+
           # Check ingress
           echo "Checking ingress..."
           kubectl get ingress -n cis-ops
-          
+
           # Check ingress controller
           echo "Checking ingress controller..."
           kubectl get pods -n ingress-nginx
-          
+
           # Test health endpoints
           echo "Testing application health..."
-          
+
           # Get ingress IP
-          INGRESS_IP=\$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "localhost")
-          
-          if [ "\$INGRESS_IP" != "localhost" ]; then
+          INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "localhost")
+
+          if [ "$INGRESS_IP" != "localhost" ]; then
             echo "Testing backend health..."
-            curl -f http://\$INGRESS_IP/api/health || echo "Backend health check failed"
-            
+            curl -f http://$INGRESS_IP/api/health || echo "Backend health check failed"
+
             echo "Testing frontend..."
-            curl -f http://\$INGRESS_IP/ || echo "Frontend check failed"
+            curl -f http://$INGRESS_IP/ || echo "Frontend check failed"
           else
             echo "⚠️  No external IP found, skipping HTTP tests"
           fi
-          
+
           echo "✅ Validation completed!"
           EOF
-          
+
           chmod +x k8s/manifests/validate.sh
 
-          # Create ArgoCD Application (separate from manifests)
+          # Create ArgoCD Application
           cat <<EOF > k8s/argocd-application.yaml
           apiVersion: argoproj.io/v1alpha1
           kind: Application
@@ -475,7 +474,7 @@ jobs:
             name: cis-ops
             namespace: argocd
             finalizers:
-              - resources-finalizer.argocd.argoproj.io
+            - resources-finalizer.argocd.argoproj.io
           spec:
             project: default
             source:
@@ -501,7 +500,6 @@ jobs:
                   factor: 2
                   maxDuration: 3m
           EOF
-
       - name: Commit and push manifests
         run: |
           git add k8s/
@@ -525,7 +523,6 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create deployment summary
         run: |
           echo "## 🚀 Deployment Summary (No Kustomize)" >> $GITHUB_STEP_SUMMARY
