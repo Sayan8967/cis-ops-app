@@ -249,7 +249,7 @@ jobs:
                       cpu: "200m"
           EOF
 
-          # Backend LoadBalancer Service
+          # Backend NodePort Service
           cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
@@ -262,17 +262,18 @@ jobs:
               app.kubernetes.io/component: backend
               app.kubernetes.io/managed-by: argocd
           spec:
-            type: LoadBalancer
+            type: NodePort
             selector:
               app: cis-ops-backend
             ports:
             - name: http
               port: 4000
               targetPort: 4000
+              nodePort: 30400
               protocol: TCP
           EOF
 
-          # Frontend LoadBalancer Service
+          # Frontend NodePort Service
           cat > k8s/manifests/frontend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
@@ -285,13 +286,14 @@ jobs:
               app.kubernetes.io/component: frontend
               app.kubernetes.io/managed-by: argocd
           spec:
-            type: LoadBalancer
+            type: NodePort
             selector:
               app: cis-ops-frontend
             ports:
             - name: http
               port: 80
               targetPort: 80
+              nodePort: 30080
               protocol: TCP
           EOF
 
@@ -342,12 +344,14 @@ jobs:
 
       - name: Create deployment summary
         run: |
-          echo "## 🚀 LoadBalancer Deployment Ready" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 NodePort Deployment Ready for KIND" >> $GITHUB_STEP_SUMMARY
           echo "### Images:" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "### Services:" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: LoadBalancer on port 80" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend: LoadBalancer on port 4000" >> $GITHUB_STEP_SUMMARY
-          echo "### Deploy:" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: NodePort on localhost:30080" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: NodePort on localhost:30400" >> $GITHUB_STEP_SUMMARY
+          echo "### Deploy & Access:" >> $GITHUB_STEP_SUMMARY
           echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
+          echo "Frontend: http://localhost:30080" >> $GITHUB_STEP_SUMMARY
+          echo "Backend: http://localhost:30400/api/health" >> $GITHUB_STEP_SUMMARY
