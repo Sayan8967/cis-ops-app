@@ -9,11 +9,12 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/managed-by: argocd
 spec:
-  type: LoadBalancer
+  type: NodePort
   selector:
     app: cis-ops-backend
   ports:
   - name: http
     port: 4000
     targetPort: 4000
+    nodePort: 30400
     protocol: TCP
