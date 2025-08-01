@@ -173,6 +173,67 @@ jobs:
               app.kubernetes.io/managed-by: argocd
           EOF
 
+          # Create ServiceAccount for backend
+          echo "Creating backend ServiceAccount..."
+          cat > k8s/manifests/backend-serviceaccount.yaml << 'EOF'
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: cis-ops-backend-sa
+            namespace: cis-ops
+            labels:
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/component: backend
+          EOF
+
+          # Create ClusterRole for metrics access
+          echo "Creating ClusterRole for metrics access..."
+          cat > k8s/manifests/metrics-clusterrole.yaml << 'EOF'
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: cis-ops-metrics-reader
+            labels:
+              app.kubernetes.io/name: cis-ops
+          rules:
+          - apiGroups: [""]
+            resources: 
+              - "nodes"
+              - "pods"
+              - "services"
+              - "namespaces"
+            verbs: ["get", "list", "watch"]
+          - apiGroups: ["apps"]
+            resources:
+              - "deployments"
+              - "replicasets"
+            verbs: ["get", "list", "watch"]
+          - apiGroups: ["metrics.k8s.io"]
+            resources:
+              - "nodes"
+              - "pods"
+            verbs: ["get", "list"]
+          EOF
+
+          # Create ClusterRoleBinding
+          echo "Creating ClusterRoleBinding..."
+          cat > k8s/manifests/metrics-clusterrolebinding.yaml << 'EOF'
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: cis-ops-metrics-reader-binding
+            labels:
+              app.kubernetes.io/name: cis-ops
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cis-ops-metrics-reader
+          subjects:
+          - kind: ServiceAccount
+            name: cis-ops-backend-sa
+            namespace: cis-ops
+          EOF
+
           # Update backend deployment with new image or create if it doesn't exist
           if [ -f "k8s/manifests/backend-deployment.yaml" ]; then
             echo "Updating existing backend deployment..."
@@ -202,6 +263,7 @@ jobs:
                   app.kubernetes.io/name: cis-ops
                   app.kubernetes.io/component: backend
               spec:
+                serviceAccountName: cis-ops-backend-sa
                 containers:
                 - name: backend
                   image: BACKEND_IMAGE_PLACEHOLDER
@@ -215,6 +277,8 @@ jobs:
                     value: "4000"
                   - name: CORS_ORIGIN
                     value: "*"
+                  - name: NAMESPACE
+                    value: "cis-ops"
                   resources:
                     requests:
                       memory: "128Mi"
@@ -462,6 +526,10 @@ jobs:
           echo "### Updated Images:" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### RBAC Resources Added:" >> $GITHUB_STEP_SUMMARY
+          echo "- ServiceAccount: \`cis-ops-backend-sa\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ClusterRole: \`cis-ops-metrics-reader\`" >> $GITHUB_STEP_SUMMARY
+          echo "- ClusterRoleBinding: \`cis-ops-metrics-reader-binding\`" >> $GITHUB_STEP_SUMMARY
           echo "### Health Check Improvements:" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: HTTP health checks on \`/health\` endpoint" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: HTTP health checks on \`/\` endpoint" >> $GITHUB_STEP_SUMMARY
