@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cis-ops-backend
+  namespace: cis-ops
+  labels:
+    app: cis-ops-backend
+    app.kubernetes.io/name: cis-ops
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: argocd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cis-ops-backend
+  template:
+    metadata:
+      labels:
+        app: cis-ops-backend
+        app.kubernetes.io/name: cis-ops
+        app.kubernetes.io/component: backend
+    spec:
+      containers:
+      - name: backend
+        image: docker.io/sayan896/cis-ops-backend:bb56d271e92e8d8b4a02fcebf0efcfcd1fb72d92
+        ports:
+        - containerPort: 4000
+          name: http
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: PORT
+          value: "4000"
+        - name: CORS_ORIGIN
+          value: "*"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
