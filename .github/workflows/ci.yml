@@ -151,17 +151,31 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
       
-      - name: Update Kubernetes manifests
+      - name: Create deployment directory
+        run: mkdir -p k8s/manifests
+      
+      - name: Update or Create Kubernetes manifests
         run: |
-          # Create manifests directory if it doesn't exist
-          mkdir -p k8s/manifests
-          
-          # Update backend deployment with new image
+          # Create namespace if it doesn't exist
+          if [ ! -f "k8s/manifests/namespace.yaml" ]; then
+            cat > k8s/manifests/namespace.yaml << 'EOF'
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cis-ops
+            labels:
+              name: cis-ops
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/managed-by: argocd
+          EOF
+          fi
+
+          # Update backend deployment with new image or create if it doesn't exist
           if [ -f "k8s/manifests/backend-deployment.yaml" ]; then
+            echo "Updating existing backend deployment..."
             sed -i "s|image:.*cis-ops-backend.*|image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
           else
-            echo "Backend deployment manifest not found. Creating new one..."
-            # Create backend deployment if it doesn't exist
+            echo "Creating new backend deployment..."
             cat > k8s/manifests/backend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
@@ -221,12 +235,12 @@ jobs:
             sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
           fi
           
-          # Update frontend deployment with new image
+          # Update frontend deployment with new image or create if it doesn't exist
           if [ -f "k8s/manifests/frontend-deployment.yaml" ]; then
+            echo "Updating existing frontend deployment..."
             sed -i "s|image:.*cis-ops-frontend.*|image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
           else
-            echo "Frontend deployment manifest not found. Creating new one..."
-            # Create frontend deployment if it doesn't exist
+            echo "Creating new frontend deployment..."
             cat > k8s/manifests/frontend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
@@ -279,14 +293,97 @@ jobs:
             sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
           fi
 
+          # Create backend service if it doesn't exist
+          if [ ! -f "k8s/manifests/backend-service.yaml" ]; then
+            cat > k8s/manifests/backend-service.yaml << 'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-backend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-backend
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/component: backend
+              app.kubernetes.io/managed-by: argocd
+          spec:
+            type: NodePort
+            selector:
+              app: cis-ops-backend
+            ports:
+            - name: http
+              port: 4000
+              targetPort: 4000
+              nodePort: 30400
+              protocol: TCP
+          EOF
+          fi
+
+          # Create frontend service if it doesn't exist
+          if [ ! -f "k8s/manifests/frontend-service.yaml" ]; then
+            cat > k8s/manifests/frontend-service.yaml << 'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cis-ops-frontend-service
+            namespace: cis-ops
+            labels:
+              app: cis-ops-frontend
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/component: frontend
+              app.kubernetes.io/managed-by: argocd
+          spec:
+            type: NodePort
+            selector:
+              app: cis-ops-frontend
+            ports:
+            - name: http
+              port: 80
+              targetPort: 80
+              nodePort: 30080
+              protocol: TCP
+          EOF
+          fi
+
+          # Create ArgoCD application if it doesn't exist
+          if [ ! -f "k8s/argocd-application.yaml" ]; then
+            cat > k8s/argocd-application.yaml << 'EOF'
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: cis-ops
+            namespace: argocd
+            finalizers:
+            - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: default
+            source:
+              repoURL: REPO_URL_PLACEHOLDER
+              targetRevision: BRANCH_PLACEHOLDER
+              path: k8s/manifests
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: cis-ops
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+                allowEmpty: false
+              syncOptions:
+              - CreateNamespace=true
+          EOF
+            sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
+            sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
+          fi
+
       - name: Check for changes and commit
         run: |
           # Check if there are any changes
-          if git diff --quiet k8s/manifests/; then
+          if git diff --quiet k8s/; then
             echo "No changes detected in manifests"
           else
             echo "Changes detected, committing updates..."
-            git add k8s/manifests/
+            git add k8s/
             git commit -m "🚀 Update deployment images to ${{ github.sha }}"
             
             # Use a retry mechanism for push in case of conflicts
