@@ -382,8 +382,10 @@ jobs:
           echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "### Deploy:" >> $GITHUB_STEP_SUMMARY
           echo "1. \`kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/kind/deploy.yaml\`" >> $GITHUB_STEP_SUMMARY
-          echo "2. \`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
-          echo "3. Add to /etc/hosts: \`127.0.0.1 cis-ops.local\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. \`kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=90s\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. \`kubectl delete -A ValidatingWebhookConfiguration ingress-nginx-admission\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. \`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
+          echo "5. Add to /etc/hosts: \`127.0.0.1 cis-ops.local\`" >> $GITHUB_STEP_SUMMARY
           echo "### Access:" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: http://cis-ops.local" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: http://cis-ops.local/api/health" >> $GITHUB_STEP_SUMMARY
