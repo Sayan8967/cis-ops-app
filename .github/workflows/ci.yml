@@ -222,21 +222,38 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
-                  # Use TCP socket check instead of HTTP until health endpoint is implemented
+                  # HTTP health checks using the new /health endpoint
                   livenessProbe:
-                    tcpSocket:
+                    httpGet:
+                      path: /health
                       port: 4000
+                      scheme: HTTP
                     initialDelaySeconds: 60
                     periodSeconds: 30
                     timeoutSeconds: 10
                     failureThreshold: 3
+                    successThreshold: 1
                   readinessProbe:
-                    tcpSocket:
+                    httpGet:
+                      path: /health
                       port: 4000
+                      scheme: HTTP
                     initialDelaySeconds: 30
                     periodSeconds: 10
                     timeoutSeconds: 5
                     failureThreshold: 3
+                    successThreshold: 1
+                  # Startup probe for initial container startup
+                  startupProbe:
+                    httpGet:
+                      path: /health
+                      port: 4000
+                      scheme: HTTP
+                    initialDelaySeconds: 15
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 10
+                    successThreshold: 1
           EOF
             echo "Replacing backend image placeholder..."
             sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
@@ -445,15 +462,15 @@ jobs:
           echo "### Updated Images:" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "### Health Check Changes:" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend: Using TCP socket checks on port 4000 (more reliable)" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: Using HTTP health checks on port 80" >> $GITHUB_STEP_SUMMARY
+          echo "### Health Check Improvements:" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: HTTP health checks on \`/health\` endpoint" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: HTTP health checks on \`/\` endpoint" >> $GITHUB_STEP_SUMMARY
+          echo "- Added startup probes for better initial container startup" >> $GITHUB_STEP_SUMMARY
+          echo "### Available Endpoints:" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend Health: \`http://localhost:30400/health\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend API Health: \`http://localhost:30400/api/health\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`http://localhost:30080\`" >> $GITHUB_STEP_SUMMARY
           echo "### ArgoCD Sync:" >> $GITHUB_STEP_SUMMARY
           echo "ArgoCD will automatically detect and sync these changes." >> $GITHUB_STEP_SUMMARY
           echo "### Manual Commands:" >> $GITHUB_STEP_SUMMARY
           echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
-          echo "### Services:" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: NodePort on localhost:30080" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend: NodePort on localhost:30400" >> $GITHUB_STEP_SUMMARY
-          echo "### Next Steps:" >> $GITHUB_STEP_SUMMARY
-          echo "Consider implementing \`/api/health\` endpoint in your backend for better health monitoring." >> $GITHUB_STEP_SUMMARY

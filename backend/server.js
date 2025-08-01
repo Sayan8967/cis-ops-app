@@ -9,6 +9,55 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  const healthCheck = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+    version: process.env.npm_package_version || '1.0.0',
+    system: {
+      platform: os.platform(),
+      arch: os.arch(),
+      hostname: os.hostname(),
+      cpus: os.cpus().length,
+      totalMemory: `${Math.round(os.totalmem() / (1024 * 1024 * 1024))}GB`,
+      freeMemory: `${Math.round(os.freemem() / (1024 * 1024 * 1024) * 100) / 100}GB`,
+      loadAverage: os.loadavg()
+    }
+  };
+  
+  res.status(200).json(healthCheck);
+});
+
+// API health check (more detailed)
+app.get('/api/health', (req, res) => {
+  const healthCheck = {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+    services: {
+      database: 'connected', // Update this when you add a real database
+      websocket: 'active',
+      api: 'operational'
+    },
+    checks: {
+      memory: os.freemem() > (os.totalmem() * 0.1), // At least 10% free memory
+      cpu: os.loadavg()[0] < os.cpus().length * 2, // Load average check
+      uptime: process.uptime() > 0
+    }
+  };
+  
+  // Determine overall health status
+  const allChecksPass = Object.values(healthCheck.checks).every(check => check === true);
+  healthCheck.status = allChecksPass ? 'healthy' : 'degraded';
+  
+  const statusCode = allChecksPass ? 200 : 503;
+  res.status(statusCode).json(healthCheck);
+});
+
 // Real system metrics function
 function getRealMetrics() {
   const cpus = os.cpus();
@@ -119,6 +168,8 @@ io.on('connection', socket => {
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Health check available at: http://localhost:${PORT}/health`);
+  console.log(`API health check available at: http://localhost:${PORT}/api/health`);
   console.log(`System: ${os.platform()} ${os.arch()}`);
   console.log(`CPU Cores: ${os.cpus().length}`);
   console.log(`Total Memory: ${Math.round(os.totalmem() / (1024 * 1024 * 1024))}GB`);
