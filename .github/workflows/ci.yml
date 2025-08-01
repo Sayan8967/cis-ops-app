@@ -394,12 +394,21 @@ jobs:
                 allowEmpty: false
               syncOptions:
               - CreateNamespace=true
+              - RespectIgnoreDifferences=false
+              - ServerSideApply=true
+              retry:
+                limit: 5
+                backoff:
+                  duration: 5s
+                  factor: 2
+                  maxDuration: 3m
           EOF
 
-          # Replace placeholders
+          # Replace placeholders with proper Git URL format
           sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
           sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
-          sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
+          # Ensure .git suffix for proper Git operations
+          sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}.git|g" k8s/argocd-application.yaml
           sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
 
       - name: Commit and push manifests
