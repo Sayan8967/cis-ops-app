@@ -64,6 +64,28 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
+      
+      # Add debugging step
+      - name: Debug Docker registry connection
+        run: |
+          echo "Testing Docker registry connection..."
+          docker info
+          echo "Registry: ${{ env.DOCKER_REGISTRY }}"
+          echo "Backend Image: ${{ env.BACKEND_IMAGE }}"
+          echo "Full image name: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}"
+      
+      # Verify Dockerfile exists
+      - name: Verify Dockerfile exists
+        run: |
+          if [ -f "./backend/Dockerfile" ]; then
+            echo "✅ Backend Dockerfile found"
+            echo "Dockerfile contents:"
+            head -10 ./backend/Dockerfile
+          else
+            echo "❌ Backend Dockerfile not found"
+            exit 1
+          fi
+      
       - name: Build and push backend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -73,8 +95,21 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+          # Add build args that might be needed for backend
+          build-args: |
+            NODE_ENV=production
+            PORT=4000
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Add platform specification for compatibility
+          platforms: linux/amd64
+      
+      # Add verification step
+      - name: Verify backend image push
+        run: |
+          echo "Verifying backend image was pushed successfully..."
+          docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          docker images | grep ${{ env.BACKEND_IMAGE }} || echo "Image not found locally after pull"
 
   docker-frontend:
     needs: build-frontend
@@ -89,6 +124,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
+      
+      # Add debugging step for consistency
+      - name: Debug Docker registry connection
+        run: |
+          echo "Testing Docker registry connection..."
+          echo "Registry: ${{ env.DOCKER_REGISTRY }}"
+          echo "Frontend Image: ${{ env.FRONTEND_IMAGE }}"
+          echo "Full image name: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}"
+      
       - name: Build and push frontend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -103,6 +147,8 @@ jobs:
             REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Add platform specification for consistency
+          platforms: linux/amd64
 
   trivy-scan-backend:
     needs: docker-backend
@@ -208,6 +254,19 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
+                  # Add health checks
+                  livenessProbe:
+                    httpGet:
+                      path: /api/health
+                      port: 4000
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /api/health
+                      port: 4000
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
           EOF
 
           # Frontend Deployment
@@ -247,6 +306,19 @@ jobs:
                     limits:
                       memory: "256Mi"
                       cpu: "200m"
+                  # Add health checks
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 80
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
           EOF
 
           # Backend NodePort Service
@@ -336,7 +408,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "🚀 Update K8s manifests with LoadBalancer services - ${{ github.sha }}"
+            git commit -m "🚀 Update K8s manifests with NodePort services - ${{ github.sha }}"
             git push origin HEAD:${{ github.ref_name }}
           fi
         env:
@@ -355,3 +427,7 @@ jobs:
           echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
           echo "Frontend: http://localhost:30080" >> $GITHUB_STEP_SUMMARY
           echo "Backend: http://localhost:30400/api/health" >> $GITHUB_STEP_SUMMARY
+          echo "### Troubleshooting:" >> $GITHUB_STEP_SUMMARY
+          echo "- Check pod status: \`kubectl get pods -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
+          echo "- View logs: \`kubectl logs -n cis-ops deployment/cis-ops-backend\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Describe service: \`kubectl describe svc -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
