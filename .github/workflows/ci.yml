@@ -144,9 +144,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply NGINX Ingress Controller for KIND
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.9.4/deploy/static/provider/kind/deploy.yaml
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
@@ -252,7 +249,7 @@ jobs:
                       cpu: "200m"
           EOF
 
-          # Backend NodePort Service
+          # Backend Service (ClusterIP for Ingress)
           cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
@@ -265,18 +262,17 @@ jobs:
               app.kubernetes.io/component: backend
               app.kubernetes.io/managed-by: argocd
           spec:
-            type: NodePort
+            type: ClusterIP
             selector:
               app: cis-ops-backend
             ports:
             - name: http
               port: 4000
               targetPort: 4000
-              nodePort: 30400
               protocol: TCP
           EOF
 
-          # Frontend NodePort Service
+          # Frontend Service (ClusterIP for Ingress)
           cat > k8s/manifests/frontend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
@@ -289,15 +285,48 @@ jobs:
               app.kubernetes.io/component: frontend
               app.kubernetes.io/managed-by: argocd
           spec:
-            type: NodePort
+            type: ClusterIP
             selector:
               app: cis-ops-frontend
             ports:
             - name: http
               port: 80
               targetPort: 80
-              nodePort: 30080
               protocol: TCP
+          EOF
+
+          # Ingress
+          cat > k8s/manifests/ingress.yaml << 'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: cis-ops-ingress
+            namespace: cis-ops
+            labels:
+              app.kubernetes.io/name: cis-ops
+              app.kubernetes.io/managed-by: argocd
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: cis-ops.local
+              http:
+                paths:
+                - path: /api
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-backend-service
+                      port:
+                        number: 4000
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: cis-ops-frontend-service
+                      port:
+                        number: 80
           EOF
 
           # ArgoCD Application
@@ -332,6 +361,7 @@ jobs:
           sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
           sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
           sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
+
       - name: Commit and push manifests
         run: |
           git add k8s/
@@ -343,3 +373,19 @@ jobs:
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create deployment summary
+        run: |
+          echo "## 🚀 Ingress Deployment Ready for KIND" >> $GITHUB_STEP_SUMMARY
+          echo "### Images:" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Deploy:" >> $GITHUB_STEP_SUMMARY
+          echo "1. \`kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v0.34.1/deploy/static/provider/cloud/deploy.yaml\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. \`kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=90s\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. \`kubectl delete -A ValidatingWebhookConfiguration ingress-nginx-admission\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. \`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
+          echo "5. Add to /etc/hosts: \`127.0.0.1 cis-ops.local\`" >> $GITHUB_STEP_SUMMARY
+          echo "### Access:" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: http://cis-ops.local" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend: http://cis-ops.local/api/health" >> $GITHUB_STEP_SUMMARY
