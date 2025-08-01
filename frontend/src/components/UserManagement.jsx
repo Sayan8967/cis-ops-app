@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_ENDPOINTS, createEndpoint } from '../api/config.js';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
@@ -19,7 +20,7 @@ export default function UserManagement() {
 
   const fetchUsers = async () => {
     try {
-      const response = await axios.get('http://localhost:4000/api/users');
+      const response = await axios.get(API_ENDPOINTS.USERS);
       setUsers(response.data);
     } catch (error) {
       console.error('Error fetching users:', error);
@@ -32,9 +33,9 @@ export default function UserManagement() {
     e.preventDefault();
     try {
       if (editingUser) {
-        await axios.put(`http://localhost:4000/api/users/${editingUser.id}`, formData);
+        await axios.put(createEndpoint(`/api/users/${editingUser.id}`), formData);
       } else {
-        await axios.post('http://localhost:4000/api/users', formData);
+        await axios.post(API_ENDPOINTS.USERS, formData);
       }
       fetchUsers();
       resetForm();
@@ -46,7 +47,7 @@ export default function UserManagement() {
   const handleDelete = async (userId) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
       try {
-        await axios.delete(`http://localhost:4000/api/users/${userId}`);
+        await axios.delete(createEndpoint(`/api/users/${userId}`));
         fetchUsers();
       } catch (error) {
         console.error('Error deleting user:', error);

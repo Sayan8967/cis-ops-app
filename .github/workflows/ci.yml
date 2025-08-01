@@ -50,6 +50,7 @@ jobs:
         env:
           REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
           REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+          REACT_APP_BACKEND_URL: http://mydevopsproject.live:30400
 
   docker-backend:
     needs: build-backend
@@ -101,6 +102,7 @@ jobs:
           build-args: |
             REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }}
             REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
+            REACT_APP_BACKEND_URL=http://mydevopsproject.live:30400
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -535,9 +537,9 @@ jobs:
           echo "- Frontend: HTTP health checks on \`/\` endpoint" >> $GITHUB_STEP_SUMMARY
           echo "- Added startup probes for better initial container startup" >> $GITHUB_STEP_SUMMARY
           echo "### Available Endpoints:" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Health: \`http://localhost:30400/health\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend API Health: \`http://localhost:30400/api/health\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: \`http://localhost:30080\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend Health: \`http://mydevopsproject.live:30400/health\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Backend API Health: \`http://mydevopsproject.live:30400/api/health\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: \`http://mydevopsproject.live:30080\`" >> $GITHUB_STEP_SUMMARY
           echo "### ArgoCD Sync:" >> $GITHUB_STEP_SUMMARY
           echo "ArgoCD will automatically detect and sync these changes." >> $GITHUB_STEP_SUMMARY
           echo "### Manual Commands:" >> $GITHUB_STEP_SUMMARY

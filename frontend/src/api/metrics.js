@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_ENDPOINTS } from './config.js';
 
-// Use relative URL - Ingress will route to backend
-export const fetchMetrics = () => axios.get('/api/metrics').then(res => res.data);
+// Use the centralized API configuration
+export const fetchMetrics = () => axios.get(API_ENDPOINTS.METRICS).then(res => res.data);
