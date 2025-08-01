@@ -156,9 +156,13 @@ jobs:
       
       - name: Update or Create Kubernetes manifests
         run: |
+          # Show what we're working with for debugging
+          echo "Current directory: $(pwd)"
+          echo "Creating k8s/manifests directory..."
+          
           # Create namespace if it doesn't exist
-          if [ ! -f "k8s/manifests/namespace.yaml" ]; then
-            cat > k8s/manifests/namespace.yaml << 'EOF'
+          echo "Creating namespace.yaml..."
+          cat > k8s/manifests/namespace.yaml << 'EOF'
           apiVersion: v1
           kind: Namespace
           metadata:
@@ -168,7 +172,6 @@ jobs:
               app.kubernetes.io/name: cis-ops
               app.kubernetes.io/managed-by: argocd
           EOF
-          fi
 
           # Update backend deployment with new image or create if it doesn't exist
           if [ -f "k8s/manifests/backend-deployment.yaml" ]; then
@@ -232,6 +235,7 @@ jobs:
                     initialDelaySeconds: 5
                     periodSeconds: 5
           EOF
+            echo "Replacing backend image placeholder..."
             sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
           fi
           
@@ -290,12 +294,13 @@ jobs:
                     initialDelaySeconds: 5
                     periodSeconds: 5
           EOF
+            echo "Replacing frontend image placeholder..."
             sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
           fi
 
-          # Create backend service if it doesn't exist
-          if [ ! -f "k8s/manifests/backend-service.yaml" ]; then
-            cat > k8s/manifests/backend-service.yaml << 'EOF'
+          # Create backend service
+          echo "Creating backend service..."
+          cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -317,11 +322,10 @@ jobs:
               nodePort: 30400
               protocol: TCP
           EOF
-          fi
 
-          # Create frontend service if it doesn't exist
-          if [ ! -f "k8s/manifests/frontend-service.yaml" ]; then
-            cat > k8s/manifests/frontend-service.yaml << 'EOF'
+          # Create frontend service
+          echo "Creating frontend service..."
+          cat > k8s/manifests/frontend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -343,11 +347,10 @@ jobs:
               nodePort: 30080
               protocol: TCP
           EOF
-          fi
 
-          # Create ArgoCD application if it doesn't exist
-          if [ ! -f "k8s/argocd-application.yaml" ]; then
-            cat > k8s/argocd-application.yaml << 'EOF'
+          # Create ArgoCD application
+          echo "Creating ArgoCD application..."
+          cat > k8s/argocd-application.yaml << 'EOF'
           apiVersion: argoproj.io/v1alpha1
           kind: Application
           metadata:
@@ -372,18 +375,45 @@ jobs:
               syncOptions:
               - CreateNamespace=true
           EOF
-            sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
-            sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
-          fi
+          echo "Replacing ArgoCD placeholders..."
+          sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}|g" k8s/argocd-application.yaml
+          sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
+          
+          # Show what we created
+          echo "Files created:"
+          ls -la k8s/manifests/
+          ls -la k8s/
+          
+          echo "Content verification:"
+          echo "=== Backend Deployment ==="
+          head -10 k8s/manifests/backend-deployment.yaml
+          echo "=== Frontend Deployment ==="
+          head -10 k8s/manifests/frontend-deployment.yaml
 
       - name: Check for changes and commit
         run: |
-          # Check if there are any changes
-          if git diff --quiet k8s/; then
+          # Show current directory and files for debugging
+          echo "Current directory: $(pwd)"
+          echo "Files in k8s/manifests/:"
+          ls -la k8s/manifests/ || echo "k8s/manifests/ doesn't exist"
+          
+          # Show git status for debugging
+          echo "Git status:"
+          git status
+          
+          # Add all files in k8s directory
+          git add k8s/
+          
+          # Check if there are staged changes
+          if git diff --staged --quiet; then
             echo "No changes detected in manifests"
+            echo "Git diff output:"
+            git diff --staged
           else
             echo "Changes detected, committing updates..."
-            git add k8s/
+            echo "Staged changes:"
+            git diff --staged --name-only
+            
             git commit -m "🚀 Update deployment images to ${{ github.sha }}"
             
             # Use a retry mechanism for push in case of conflicts
