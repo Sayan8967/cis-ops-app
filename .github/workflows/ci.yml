@@ -64,28 +64,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
-      
-      # Add debugging step
-      - name: Debug Docker registry connection
-        run: |
-          echo "Testing Docker registry connection..."
-          docker info
-          echo "Registry: ${{ env.DOCKER_REGISTRY }}"
-          echo "Backend Image: ${{ env.BACKEND_IMAGE }}"
-          echo "Full image name: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}"
-      
-      # Verify Dockerfile exists
-      - name: Verify Dockerfile exists
-        run: |
-          if [ -f "./backend/Dockerfile" ]; then
-            echo "✅ Backend Dockerfile found"
-            echo "Dockerfile contents:"
-            head -10 ./backend/Dockerfile
-          else
-            echo "❌ Backend Dockerfile not found"
-            exit 1
-          fi
-      
       - name: Build and push backend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -95,21 +73,8 @@ jobs:
           tags: |
             ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
             ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
-          # Add build args that might be needed for backend
-          build-args: |
-            NODE_ENV=production
-            PORT=4000
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Add platform specification for compatibility
-          platforms: linux/amd64
-      
-      # Add verification step
-      - name: Verify backend image push
-        run: |
-          echo "Verifying backend image was pushed successfully..."
-          docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-          docker images | grep ${{ env.BACKEND_IMAGE }} || echo "Image not found locally after pull"
 
   docker-frontend:
     needs: build-frontend
@@ -124,15 +89,6 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
-      
-      # Add debugging step for consistency
-      - name: Debug Docker registry connection
-        run: |
-          echo "Testing Docker registry connection..."
-          echo "Registry: ${{ env.DOCKER_REGISTRY }}"
-          echo "Frontend Image: ${{ env.FRONTEND_IMAGE }}"
-          echo "Full image name: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}"
-      
       - name: Build and push frontend Docker image
         uses: docker/build-push-action@v5
         with:
@@ -147,8 +103,6 @@ jobs:
             REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Add platform specification for consistency
-          platforms: linux/amd64
 
   trivy-scan-backend:
     needs: docker-backend
@@ -182,7 +136,7 @@ jobs:
         with:
           sarif_file: 'trivy-frontend-results.sarif'
 
-  k8s-manifest:
+  update-manifests:
     needs: [trivy-scan-backend, trivy-scan-frontend]
     runs-on: ubuntu-latest
     steps:
@@ -190,28 +144,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      - name: Create deployment directory
-        run: mkdir -p k8s/manifests
-      - name: Generate Kubernetes Manifests
+      
+      - name: Update Kubernetes manifests
         run: |
-          # Namespace
-          cat > k8s/manifests/namespace.yaml << 'EOF'
-          apiVersion: v1
-          kind: Namespace
-          metadata:
-            name: cis-ops
-            labels:
-              name: cis-ops
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/managed-by: argocd
-          EOF
-
-          # Backend Deployment
-          cat > k8s/manifests/backend-deployment.yaml << 'EOF'
+          # Create manifests directory if it doesn't exist
+          mkdir -p k8s/manifests
+          
+          # Update backend deployment with new image
+          if [ -f "k8s/manifests/backend-deployment.yaml" ]; then
+            sed -i "s|image:.*cis-ops-backend.*|image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
+          else
+            echo "Backend deployment manifest not found. Creating new one..."
+            # Create backend deployment if it doesn't exist
+            cat > k8s/manifests/backend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -236,7 +187,7 @@ jobs:
               spec:
                 containers:
                 - name: backend
-                  image: IMAGE_PLACEHOLDER
+                  image: BACKEND_IMAGE_PLACEHOLDER
                   ports:
                   - containerPort: 4000
                     name: http
@@ -254,7 +205,6 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
-                  # Add health checks
                   livenessProbe:
                     httpGet:
                       path: /api/health
@@ -268,9 +218,16 @@ jobs:
                     initialDelaySeconds: 5
                     periodSeconds: 5
           EOF
-
-          # Frontend Deployment
-          cat > k8s/manifests/frontend-deployment.yaml << 'EOF'
+            sed -i "s|BACKEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
+          fi
+          
+          # Update frontend deployment with new image
+          if [ -f "k8s/manifests/frontend-deployment.yaml" ]; then
+            sed -i "s|image:.*cis-ops-frontend.*|image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
+          else
+            echo "Frontend deployment manifest not found. Creating new one..."
+            # Create frontend deployment if it doesn't exist
+            cat > k8s/manifests/frontend-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -295,7 +252,7 @@ jobs:
               spec:
                 containers:
                 - name: frontend
-                  image: IMAGE_PLACEHOLDER
+                  image: FRONTEND_IMAGE_PLACEHOLDER
                   ports:
                   - containerPort: 80
                     name: http
@@ -306,7 +263,6 @@ jobs:
                     limits:
                       memory: "256Mi"
                       cpu: "200m"
-                  # Add health checks
                   livenessProbe:
                     httpGet:
                       path: /
@@ -320,123 +276,45 @@ jobs:
                     initialDelaySeconds: 5
                     periodSeconds: 5
           EOF
-
-          # Backend NodePort Service
-          cat > k8s/manifests/backend-service.yaml << 'EOF'
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: cis-ops-backend-service
-            namespace: cis-ops
-            labels:
-              app: cis-ops-backend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: backend
-              app.kubernetes.io/managed-by: argocd
-          spec:
-            type: NodePort
-            selector:
-              app: cis-ops-backend
-            ports:
-            - name: http
-              port: 4000
-              targetPort: 4000
-              nodePort: 30400
-              protocol: TCP
-          EOF
-
-          # Frontend NodePort Service
-          cat > k8s/manifests/frontend-service.yaml << 'EOF'
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: cis-ops-frontend-service
-            namespace: cis-ops
-            labels:
-              app: cis-ops-frontend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: frontend
-              app.kubernetes.io/managed-by: argocd
-          spec:
-            type: NodePort
-            selector:
-              app: cis-ops-frontend
-            ports:
-            - name: http
-              port: 80
-              targetPort: 80
-              nodePort: 30080
-              protocol: TCP
-          EOF
-
-          # ArgoCD Application
-          cat > k8s/argocd-application.yaml << 'EOF'
-          apiVersion: argoproj.io/v1alpha1
-          kind: Application
-          metadata:
-            name: cis-ops
-            namespace: argocd
-            finalizers:
-            - resources-finalizer.argocd.argoproj.io
-          spec:
-            project: default
-            source:
-              repoURL: REPO_URL_PLACEHOLDER
-              targetRevision: BRANCH_PLACEHOLDER
-              path: k8s/manifests
-            destination:
-              server: https://kubernetes.default.svc
-              namespace: cis-ops
-            syncPolicy:
-              automated:
-                prune: true
-                selfHeal: true
-                allowEmpty: false
-              syncOptions:
-              - CreateNamespace=true
-              - RespectIgnoreDifferences=false
-              - ServerSideApply=true
-              retry:
-                limit: 5
-                backoff:
-                  duration: 5s
-                  factor: 2
-                  maxDuration: 3m
-          EOF
-
-          # Replace placeholders with proper Git URL format
-          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/backend-deployment.yaml
-          sed -i "s|IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
-          # Ensure .git suffix for proper Git operations
-          sed -i "s|REPO_URL_PLACEHOLDER|${{ github.server_url }}/${{ github.repository }}.git|g" k8s/argocd-application.yaml
-          sed -i "s|BRANCH_PLACEHOLDER|${{ github.ref_name }}|g" k8s/argocd-application.yaml
-
-      - name: Commit and push manifests
-        run: |
-          git add k8s/
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "🚀 Update K8s manifests with NodePort services - ${{ github.sha }}"
-            git push origin HEAD:${{ github.ref_name }}
+            sed -i "s|FRONTEND_IMAGE_PLACEHOLDER|${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}|g" k8s/manifests/frontend-deployment.yaml
           fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for changes and commit
+        run: |
+          # Check if there are any changes
+          if git diff --quiet k8s/manifests/; then
+            echo "No changes detected in manifests"
+          else
+            echo "Changes detected, committing updates..."
+            git add k8s/manifests/
+            git commit -m "🚀 Update deployment images to ${{ github.sha }}"
+            
+            # Use a retry mechanism for push in case of conflicts
+            for i in {1..3}; do
+              if git push origin ${{ github.ref_name }}; then
+                echo "Successfully pushed changes"
+                break
+              else
+                echo "Push failed, attempt $i/3. Pulling latest changes..."
+                git pull --rebase origin ${{ github.ref_name }}
+                if [ $i -eq 3 ]; then
+                  echo "Failed to push after 3 attempts"
+                  exit 1
+                fi
+              fi
+            done
+          fi
 
       - name: Create deployment summary
         run: |
-          echo "## 🚀 NodePort Deployment Ready for KIND" >> $GITHUB_STEP_SUMMARY
-          echo "### Images:" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Update Complete" >> $GITHUB_STEP_SUMMARY
+          echo "### Updated Images:" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### ArgoCD Sync:" >> $GITHUB_STEP_SUMMARY
+          echo "ArgoCD will automatically detect and sync these changes." >> $GITHUB_STEP_SUMMARY
+          echo "### Manual Commands:" >> $GITHUB_STEP_SUMMARY
+          echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
           echo "### Services:" >> $GITHUB_STEP_SUMMARY
           echo "- Frontend: NodePort on localhost:30080" >> $GITHUB_STEP_SUMMARY
           echo "- Backend: NodePort on localhost:30400" >> $GITHUB_STEP_SUMMARY
-          echo "### Deploy & Access:" >> $GITHUB_STEP_SUMMARY
-          echo "\`kubectl apply -f k8s/manifests/\`" >> $GITHUB_STEP_SUMMARY
-          echo "Frontend: http://localhost:30080" >> $GITHUB_STEP_SUMMARY
-          echo "Backend: http://localhost:30400/api/health" >> $GITHUB_STEP_SUMMARY
-          echo "### Troubleshooting:" >> $GITHUB_STEP_SUMMARY
-          echo "- Check pod status: \`kubectl get pods -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
-          echo "- View logs: \`kubectl logs -n cis-ops deployment/cis-ops-backend\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Describe service: \`kubectl describe svc -n cis-ops\`" >> $GITHUB_STEP_SUMMARY
