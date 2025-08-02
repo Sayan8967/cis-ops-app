@@ -3,9 +3,9 @@ name: CI/CD Pipeline with Database
 
 on:
   push:
-    branches: [release, main, develop]
+    branches: [releaseV2]
   pull_request:
-    branches: [release, main]
+    branches: [releaseV2]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
