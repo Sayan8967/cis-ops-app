@@ -1,4 +1,4 @@
-# .github/workflows/ci.yml - Enhanced CI/CD Pipeline
+# .github/workflows/ci.yml - Fixed CI/CD Pipeline with proper Trivy scanning
 name: Enhanced CI/CD Pipeline
 
 on:
@@ -81,6 +81,10 @@ jobs:
   docker-backend:
     needs: build-backend
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -103,9 +107,11 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=sha,prefix={{branch}}-
+            type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push backend Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./backend
@@ -123,6 +129,10 @@ jobs:
   docker-frontend:
     needs: build-frontend
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -145,9 +155,11 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=sha,prefix={{branch}}-
+            type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push frontend Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
@@ -166,12 +178,22 @@ jobs:
     needs: docker-backend
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for image to be available
+        run: |
+          echo "Waiting for image to be available in registry..."
+          sleep 30
+          
       - name: Run Trivy vulnerability scanner (Backend)
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          image-ref: ${{ needs.docker-backend.outputs.image-tag }}
           format: 'sarif'
           output: 'trivy-backend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'  # Don't fail the pipeline on vulnerabilities for now
+        env:
+          TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -183,12 +205,22 @@ jobs:
     needs: docker-frontend
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for image to be available
+        run: |
+          echo "Waiting for image to be available in registry..."
+          sleep 30
+          
       - name: Run Trivy vulnerability scanner (Frontend)
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          image-ref: ${{ needs.docker-frontend.outputs.image-tag }}
           format: 'sarif'
           output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'  # Don't fail the pipeline on vulnerabilities for now
+        env:
+          TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
       - name: Upload Trivy scan results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
