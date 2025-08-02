@@ -1,14 +1,49 @@
-import React, { useState } from 'react';
+// frontend/src/pages/Dashboard.jsx
+import React, { useState, useEffect } from 'react';
 import Navbar from '../components/Navbar.jsx';
 import { useWsContext } from '../context/WebsocketContext.jsx';
 import MetricCard from '../components/MetricCard.jsx';
 import UserManagement from '../components/UserManagement.jsx';
+import { getBestBackendUrl, testBackendConnection } from '../api/config.js';
 
 export default function Dashboard() {
-  const { metrics } = useWsContext();
+  const { metrics, connectionStatus, reconnect } = useWsContext();
   const [activeTab, setActiveTab] = useState('metrics');
+  const [backendHealth, setBackendHealth] = useState(null);
+  const [healthCheckLoading, setHealthCheckLoading] = useState(false);
+
+  // Check backend health
+  const checkBackendHealth = async () => {
+    setHealthCheckLoading(true);
+    try {
+      const backendUrl = await getBestBackendUrl();
+      const response = await fetch(`${backendUrl}/api/health`, {
+        method: 'GET',
+        timeout: 5000,
+      });
+      
+      if (response.ok) {
+        const healthData = await response.json();
+        setBackendHealth(healthData);
+      } else {
+        setBackendHealth({ status: 'unhealthy', error: `HTTP ${response.status}` });
+      }
+    } catch (error) {
+      setBackendHealth({ status: 'unreachable', error: error.message });
+    } finally {
+      setHealthCheckLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkBackendHealth();
+    // Check health every 30 seconds
+    const healthInterval = setInterval(checkBackendHealth, 30000);
+    return () => clearInterval(healthInterval);
+  }, []);
 
   const formatUptime = (seconds) => {
+    if (!seconds) return 'N/A';
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
@@ -16,6 +51,7 @@ export default function Dashboard() {
   };
 
   const getStatusColor = (value, type) => {
+    if (!value) return 'text-gray-400';
     switch (type) {
       case 'cpu':
         return value > 80 ? 'text-red-600' : value > 60 ? 'text-yellow-600' : 'text-green-600';
@@ -26,6 +62,29 @@ export default function Dashboard() {
       default:
         return 'text-blue-600';
     }
+  };
+
+  const getConnectionStatusColor = () => {
+    switch (connectionStatus) {
+      case 'connected': return 'text-green-600 bg-green-100';
+      case 'polling': return 'text-blue-600 bg-blue-100';
+      case 'connecting': return 'text-yellow-600 bg-yellow-100';
+      default: return 'text-red-600 bg-red-100';
+    }
+  };
+
+  const getSystemStatusText = () => {
+    if (!backendHealth) return 'CHECKING...';
+    if (backendHealth.status === 'healthy') return 'OPERATIONAL';
+    if (backendHealth.status === 'degraded') return 'DEGRADED';
+    return 'OFFLINE';
+  };
+
+  const getSystemStatusColor = () => {
+    if (!backendHealth) return 'text-yellow-400';
+    if (backendHealth.status === 'healthy') return 'text-green-400';
+    if (backendHealth.status === 'degraded') return 'text-yellow-400';
+    return 'text-red-400';
   };
 
   return (
@@ -40,15 +99,52 @@ export default function Dashboard() {
               <h1 className="text-4xl font-bold mb-2">System Operations Dashboard</h1>
               <p className="text-blue-200 text-lg">Real-time monitoring and management center</p>
             </div>
-            <div className="hidden md:block">
+            <div className="hidden md:block space-y-2">
               <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4">
                 <div className="text-sm text-blue-200">System Status</div>
-                <div className="text-2xl font-bold text-green-400">OPERATIONAL</div>
+                <div className={`text-2xl font-bold ${getSystemStatusColor()}`}>
+                  {getSystemStatusText()}
+                </div>
+              </div>
+              <div className="bg-white/10 backdrop-blur-sm rounded-lg p-3">
+                <div className="text-xs text-blue-200">Connection</div>
+                <div className={`text-sm font-medium capitalize ${
+                  connectionStatus === 'connected' ? 'text-green-300' :
+                  connectionStatus === 'polling' ? 'text-blue-300' :
+                  'text-red-300'
+                }`}>
+                  {connectionStatus}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Connection Alert */}
+      {(connectionStatus === 'failed' || connectionStatus === 'error') && (
+        <div className="max-w-7xl mx-auto px-6 mt-6">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex items-center">
+              <svg className="w-5 h-5 text-red-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-red-800">Connection Issues Detected</h3>
+                <p className="text-sm text-red-700 mt-1">
+                  Unable to connect to the backend service. Some features may not work properly.
+                </p>
+              </div>
+              <button
+                onClick={reconnect}
+                className="ml-4 bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1 rounded text-sm font-medium"
+              >
+                Retry Connection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Navigation Tabs */}
       <div className="max-w-7xl mx-auto px-6 mt-8">
@@ -82,6 +178,42 @@ export default function Dashboard() {
       <div className="max-w-7xl mx-auto px-6 py-8">
         {activeTab === 'metrics' && (
           <div className="space-y-8">
+            {/* Connection Status Bar */}
+            <div className="bg-white rounded-xl shadow-lg p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-4">
+                  <div className={`px-3 py-1 rounded-full text-sm font-medium ${getConnectionStatusColor()}`}>
+                    Connection: {connectionStatus}
+                  </div>
+                  {backendHealth && (
+                    <div className="text-sm text-gray-600">
+                      Backend Health: {backendHealth.status}
+                      {backendHealth.uptime && (
+                        <span className="ml-2">
+                          (Uptime: {formatUptime(backendHealth.uptime)})
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={checkBackendHealth}
+                    disabled={healthCheckLoading}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium disabled:text-gray-400"
+                  >
+                    {healthCheckLoading ? 'Checking...' : 'Check Health'}
+                  </button>
+                  <button
+                    onClick={reconnect}
+                    className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                  >
+                    Reconnect
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Primary Metrics Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
@@ -89,7 +221,7 @@ export default function Dashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">CPU Usage</p>
                     <p className={`text-3xl font-bold ${getStatusColor(metrics.cpu, 'cpu')}`}>
-                      {metrics.cpu || 0}%
+                      {metrics.cpu || '--'}%
                     </p>
                   </div>
                   <div className="p-3 bg-blue-100 rounded-full">
@@ -105,7 +237,7 @@ export default function Dashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">Memory Usage</p>
                     <p className={`text-3xl font-bold ${getStatusColor(metrics.memory, 'memory')}`}>
-                      {metrics.memory || 0}%
+                      {metrics.memory || '--'}%
                     </p>
                   </div>
                   <div className="p-3 bg-green-100 rounded-full">
@@ -121,7 +253,7 @@ export default function Dashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">Disk Usage</p>
                     <p className={`text-3xl font-bold ${getStatusColor(metrics.disk, 'disk')}`}>
-                      {metrics.disk || 0}%
+                      {metrics.disk || '--'}%
                     </p>
                   </div>
                   <div className="p-3 bg-yellow-100 rounded-full">
@@ -137,7 +269,7 @@ export default function Dashboard() {
                   <div>
                     <p className="text-sm font-medium text-gray-600">Network</p>
                     <p className="text-3xl font-bold text-purple-600">
-                      {metrics.network || 0} Mbps
+                      {metrics.network || '--'} Mbps
                     </p>
                   </div>
                   <div className="p-3 bg-purple-100 rounded-full">
@@ -178,6 +310,10 @@ export default function Dashboard() {
                     <span className="text-gray-600">Uptime:</span>
                     <span className="font-medium">{metrics.uptime ? formatUptime(metrics.uptime) : 'N/A'}</span>
                   </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Data Source:</span>
+                    <span className="font-medium capitalize">{metrics.source || connectionStatus}</span>
+                  </div>
                 </div>
               </div>
 
@@ -186,18 +322,36 @@ export default function Dashboard() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
                     <div className="flex items-center">
-                      <div className="w-3 h-3 bg-green-500 rounded-full mr-3"></div>
+                      <div className={`w-3 h-3 rounded-full mr-3 ${
+                        backendHealth?.status === 'healthy' ? 'bg-green-500' : 
+                        backendHealth?.status === 'degraded' ? 'bg-yellow-500' : 'bg-red-500'
+                      }`}></div>
                       <span className="font-medium">System Health</span>
                     </div>
-                    <span className="text-green-600 font-semibold">Excellent</span>
+                    <span className={`font-semibold ${
+                      backendHealth?.status === 'healthy' ? 'text-green-600' : 
+                      backendHealth?.status === 'degraded' ? 'text-yellow-600' : 'text-red-600'
+                    }`}>
+                      {backendHealth?.status || 'Unknown'}
+                    </span>
                   </div>
+                  
                   <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
                     <div className="flex items-center">
-                      <div className="w-3 h-3 bg-blue-500 rounded-full mr-3"></div>
-                      <span className="font-medium">Services</span>
+                      <div className={`w-3 h-3 rounded-full mr-3 ${
+                        connectionStatus === 'connected' ? 'bg-blue-500' : 
+                        connectionStatus === 'polling' ? 'bg-yellow-500' : 'bg-red-500'
+                      }`}></div>
+                      <span className="font-medium">Connection</span>
                     </div>
-                    <span className="text-blue-600 font-semibold">Running</span>
+                    <span className={`font-semibold capitalize ${
+                      connectionStatus === 'connected' ? 'text-blue-600' : 
+                      connectionStatus === 'polling' ? 'text-yellow-600' : 'text-red-600'
+                    }`}>
+                      {connectionStatus}
+                    </span>
                   </div>
+                  
                   <div className="flex items-center justify-between p-3 bg-yellow-50 rounded-lg">
                     <div className="flex items-center">
                       <div className="w-3 h-3 bg-yellow-500 rounded-full mr-3"></div>
@@ -205,12 +359,49 @@ export default function Dashboard() {
                     </div>
                     <span className="text-yellow-600 font-semibold">0 Active</span>
                   </div>
+                  
                   <div className="text-xs text-gray-500 text-center mt-4">
                     Last updated: {metrics.timestamp ? new Date(metrics.timestamp).toLocaleString() : 'Never'}
                   </div>
                 </div>
               </div>
             </div>
+
+            {/* Kubernetes Information (if available) */}
+            {metrics.kubernetes && (
+              <div className="bg-white rounded-xl shadow-lg p-6">
+                <h3 className="text-lg font-semibold text-gray-900 mb-4">Kubernetes Cluster Status</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="text-center p-4 bg-blue-50 rounded-lg">
+                    <div className="text-2xl font-bold text-blue-600">
+                      {metrics.kubernetes.cluster?.pods?.total || 0}
+                    </div>
+                    <div className="text-sm text-gray-600">Total Pods</div>
+                    <div className="text-xs text-green-600 mt-1">
+                      {metrics.kubernetes.cluster?.pods?.running || 0} Running
+                    </div>
+                  </div>
+                  <div className="text-center p-4 bg-green-50 rounded-lg">
+                    <div className="text-2xl font-bold text-green-600">
+                      {metrics.kubernetes.cluster?.nodes?.ready || 0}
+                    </div>
+                    <div className="text-sm text-gray-600">Ready Nodes</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {metrics.kubernetes.cluster?.nodes?.total || 0} Total
+                    </div>
+                  </div>
+                  <div className="text-center p-4 bg-purple-50 rounded-lg">
+                    <div className="text-2xl font-bold text-purple-600">
+                      {metrics.kubernetes.cluster?.services || 0}
+                    </div>
+                    <div className="text-sm text-gray-600">Services</div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Namespace: {metrics.kubernetes.cluster?.namespace || 'N/A'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

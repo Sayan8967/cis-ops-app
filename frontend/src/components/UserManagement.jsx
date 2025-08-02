@@ -1,10 +1,13 @@
+// frontend/src/components/UserManagement.jsx
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { API_ENDPOINTS, createEndpoint } from '../api/config.js';
+import { getBestBackendUrl, testBackendConnection, createEndpoint } from '../api/config.js';
 
 export default function UserManagement() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [connectionStatus, setConnectionStatus] = useState('checking');
   const [showModal, setShowModal] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState({
@@ -14,16 +17,113 @@ export default function UserManagement() {
     status: 'active'
   });
 
+  // Setup axios with better error handling and timeout
+  const setupAxios = (baseURL) => {
+    const axiosInstance = axios.create({
+      baseURL,
+      timeout: 10000, // 10 second timeout
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    // Request interceptor
+    axiosInstance.interceptors.request.use(
+      (config) => {
+        console.log('Making request to:', config.url);
+        return config;
+      },
+      (error) => {
+        console.error('Request error:', error);
+        return Promise.reject(error);
+      }
+    );
+
+    // Response interceptor
+    axiosInstance.interceptors.response.use(
+      (response) => {
+        console.log('Response received:', response.status);
+        return response;
+      },
+      (error) => {
+        console.error('Response error:', error.message);
+        if (error.code === 'ECONNABORTED') {
+          setError('Request timeout - please check your connection');
+        } else if (error.response) {
+          setError(`Server error: ${error.response.status} ${error.response.statusText}`);
+        } else if (error.request) {
+          setError('No response from server - please check if the backend is running');
+        } else {
+          setError(`Request failed: ${error.message}`);
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return axiosInstance;
+  };
+
+  const [axiosInstance, setAxiosInstance] = useState(null);
+
+  // Initialize connection
   useEffect(() => {
-    fetchUsers();
+    const initializeConnection = async () => {
+      try {
+        setConnectionStatus('connecting');
+        setError(null);
+        
+        const backendUrl = await getBestBackendUrl();
+        console.log('Initializing User Management with backend:', backendUrl);
+        
+        const isReachable = await testBackendConnection(backendUrl);
+        if (!isReachable) {
+          throw new Error('Backend server is not reachable');
+        }
+        
+        const axiosConfig = setupAxios(backendUrl);
+        setAxiosInstance(axiosConfig);
+        setConnectionStatus('connected');
+        
+        // Now fetch users
+        fetchUsers(axiosConfig);
+        
+      } catch (error) {
+        console.error('Failed to initialize connection:', error);
+        setConnectionStatus('failed');
+        setError(`Connection failed: ${error.message}`);
+        setLoading(false);
+      }
+    };
+
+    initializeConnection();
   }, []);
 
-  const fetchUsers = async () => {
+  const fetchUsers = async (axiosConfig = axiosInstance) => {
+    if (!axiosConfig) {
+      setError('No connection to backend');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const response = await axios.get(API_ENDPOINTS.USERS);
+      setLoading(true);
+      setError(null);
+      
+      console.log('Fetching users...');
+      const response = await axiosConfig.get('/api/users');
+      
+      console.log('Users fetched successfully:', response.data);
       setUsers(response.data);
+      setConnectionStatus('connected');
+      
     } catch (error) {
       console.error('Error fetching users:', error);
+      setError('Failed to load users. Please check your connection and try again.');
+      
+      // If it's a connection error, try to reinitialize
+      if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
+        setConnectionStatus('failed');
+      }
     } finally {
       setLoading(false);
     }
@@ -31,26 +131,49 @@ export default function UserManagement() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!axiosInstance) {
+      setError('No connection to backend');
+      return;
+    }
+
     try {
+      setError(null);
+      
       if (editingUser) {
-        await axios.put(createEndpoint(`/api/users/${editingUser.id}`), formData);
+        console.log('Updating user:', editingUser.id, formData);
+        await axiosInstance.put(`/api/users/${editingUser.id}`, formData);
       } else {
-        await axios.post(API_ENDPOINTS.USERS, formData);
+        console.log('Creating user:', formData);
+        await axiosInstance.post('/api/users', formData);
       }
-      fetchUsers();
+      
+      await fetchUsers();
       resetForm();
+      
     } catch (error) {
       console.error('Error saving user:', error);
+      setError('Failed to save user. Please try again.');
     }
   };
 
   const handleDelete = async (userId) => {
+    if (!axiosInstance) {
+      setError('No connection to backend');
+      return;
+    }
+
     if (window.confirm('Are you sure you want to delete this user?')) {
       try {
-        await axios.delete(createEndpoint(`/api/users/${userId}`));
-        fetchUsers();
+        setError(null);
+        console.log('Deleting user:', userId);
+        
+        await axiosInstance.delete(`/api/users/${userId}`);
+        await fetchUsers();
+        
       } catch (error) {
         console.error('Error deleting user:', error);
+        setError('Failed to delete user. Please try again.');
       }
     }
   };
@@ -72,6 +195,23 @@ export default function UserManagement() {
     setShowModal(false);
   };
 
+  const retryConnection = async () => {
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const backendUrl = await getBestBackendUrl();
+      const axiosConfig = setupAxios(backendUrl);
+      setAxiosInstance(axiosConfig);
+      setConnectionStatus('connected');
+      await fetchUsers(axiosConfig);
+    } catch (error) {
+      setConnectionStatus('failed');
+      setError(`Retry failed: ${error.message}`);
+      setLoading(false);
+    }
+  };
+
   const getRoleBadgeColor = (role) => {
     switch (role) {
       case 'admin': return 'bg-red-100 text-red-800';
@@ -86,10 +226,61 @@ export default function UserManagement() {
       : 'bg-gray-100 text-gray-800';
   };
 
-  if (loading) {
+  // Connection status indicator
+  const ConnectionStatus = () => (
+    <div className="flex items-center space-x-2 text-sm">
+      <div className={`w-3 h-3 rounded-full ${
+        connectionStatus === 'connected' ? 'bg-green-500' :
+        connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
+        'bg-red-500'
+      }`}></div>
+      <span className="text-gray-600">
+        {connectionStatus === 'connected' ? 'Connected' :
+         connectionStatus === 'connecting' ? 'Connecting...' :
+         connectionStatus === 'failed' ? 'Connection Failed' :
+         'Checking Connection...'}
+      </span>
+    </div>
+  );
+
+  // Error display component
+  const ErrorDisplay = () => error && (
+    <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+      <div className="flex items-center">
+        <svg className="w-5 h-5 text-red-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <div className="flex-1">
+          <h3 className="text-sm font-medium text-red-800">Connection Error</h3>
+          <p className="text-sm text-red-700 mt-1">{error}</p>
+        </div>
+        <button
+          onClick={retryConnection}
+          className="ml-4 bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1 rounded text-sm font-medium"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+
+  if (loading && connectionStatus !== 'connected') {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">User Management</h2>
+            <p className="text-gray-600">Manage system users and their permissions</p>
+          </div>
+          <ConnectionStatus />
+        </div>
+        <ErrorDisplay />
+        <div className="flex justify-center items-center h-64">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Connecting to backend...</p>
+          </div>
+        </div>
       </div>
     );
   }
@@ -102,13 +293,19 @@ export default function UserManagement() {
           <h2 className="text-2xl font-bold text-gray-900">User Management</h2>
           <p className="text-gray-600">Manage system users and their permissions</p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-        >
-          Add New User
-        </button>
+        <div className="flex items-center space-x-4">
+          <ConnectionStatus />
+          <button
+            onClick={() => setShowModal(true)}
+            disabled={connectionStatus !== 'connected'}
+            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+          >
+            Add New User
+          </button>
+        </div>
       </div>
+
+      <ErrorDisplay />
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -161,8 +358,15 @@ export default function UserManagement() {
 
       {/* Users Table */}
       <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
           <h3 className="text-lg font-medium text-gray-900">All Users</h3>
+          <button
+            onClick={() => fetchUsers()}
+            disabled={connectionStatus !== 'connected'}
+            className="text-blue-600 hover:text-blue-800 disabled:text-gray-400 font-medium text-sm"
+          >
+            Refresh
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -219,19 +423,28 @@ export default function UserManagement() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <button
                       onClick={() => handleEdit(user)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-3 transition-colors"
+                      disabled={connectionStatus !== 'connected'}
+                      className="text-indigo-600 hover:text-indigo-900 disabled:text-gray-400 mr-3 transition-colors"
                     >
                       Edit
                     </button>
                     <button
                       onClick={() => handleDelete(user.id)}
-                      className="text-red-600 hover:text-red-900 transition-colors"
+                      disabled={connectionStatus !== 'connected'}
+                      className="text-red-600 hover:text-red-900 disabled:text-gray-400 transition-colors"
                     >
                       Delete
                     </button>
                   </td>
                 </tr>
               ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan="5" className="px-6 py-8 text-center text-gray-500">
+                    {connectionStatus === 'connected' ? 'No users found' : 'Unable to load users'}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -361,7 +574,8 @@ export default function UserManagement() {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-3 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center space-x-2"
+                  disabled={connectionStatus !== 'connected'}
+                  className="px-6 py-3 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 rounded-lg transition-colors flex items-center space-x-2"
                 >
                   {editingUser ? (
                     <>
