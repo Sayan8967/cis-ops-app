@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/Sayan8967/cis-ops-app
-    targetRevision: release
+    targetRevision: releaseV2
     path: k8s/manifests
   destination:
     server: https://kubernetes.default.svc

@@ -1,5 +1,3 @@
-# 6. Updated Backend Deployment with Database Connection
-# k8s/manifests/backend-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,7 +17,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+        image: docker.io/sayan896/cis-ops-backend:369f84c9a6331fd931edcdb51404538db4145caa
         ports:
         - containerPort: 4000
         env:
