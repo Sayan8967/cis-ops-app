@@ -1,13 +1,16 @@
-// backend/server.js - Simplified version focusing on core functionality
+// Updated Backend Server
+// backend/server.js
 const express = require('express');
 const cors = require('cors');
 const { Server } = require('socket.io');
 const http = require('http');
 const os = require('os');
+const pool = require('./db/config');
+const { initializeDatabase, insertMetrics } = require('./db/init');
 
 const app = express();
 
-// Simple CORS setup
+// CORS setup
 app.use(cors({
   origin: "*",
   credentials: true
@@ -16,25 +19,28 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Simple logging
+// Logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
-// Simple metrics function
-function getSimpleMetrics() {
+// Initialize database on startup
+initializeDatabase().catch(console.error);
+
+// Enhanced metrics function with database logging
+function getSystemMetrics() {
   try {
     const cpus = os.cpus();
     const totalMem = os.totalmem();
     const freeMem = os.freemem();
     const usedMem = totalMem - freeMem;
     
-    return {
-      cpu: Math.floor(Math.random() * 50) + 10, // Mock CPU usage
+    const metrics = {
+      cpu: Math.floor(Math.random() * 50) + 20, // Mock CPU usage
       memory: Math.round((usedMem / totalMem) * 100),
-      disk: Math.floor(Math.random() * 30) + 20, // Mock disk usage
-      network: Math.floor(Math.random() * 100) + 50, // Mock network usage
+      disk: Math.floor(Math.random() * 30) + 30, // Mock disk usage
+      network: Math.floor(Math.random() * 100) + 100, // Mock network usage
       uptime: Math.round(os.uptime()),
       platform: os.platform(),
       hostname: os.hostname(),
@@ -42,83 +48,72 @@ function getSimpleMetrics() {
       totalMemory: Math.round(totalMem / (1024 * 1024 * 1024) * 100) / 100,
       freeMemory: Math.round(freeMem / (1024 * 1024 * 1024) * 100) / 100,
       cpuCount: cpus.length,
-      processUptime: Math.round(process.uptime())
+      processUptime: Math.round(process.uptime()),
+      nodeVersion: process.version
     };
+    
+    // Periodically log metrics to database (every 30 seconds)
+    if (!getSystemMetrics.lastLog || Date.now() - getSystemMetrics.lastLog > 30000) {
+      insertMetrics(metrics).catch(console.error);
+      getSystemMetrics.lastLog = Date.now();
+    }
+    
+    return metrics;
   } catch (error) {
     console.error('Error getting metrics:', error);
     return {
-      cpu: 0,
-      memory: 0,
-      disk: 0,
-      network: 0,
-      uptime: 0,
-      platform: 'unknown',
-      hostname: 'unknown',
-      timestamp: new Date().toISOString(),
-      error: error.message
+      cpu: 0, memory: 0, disk: 0, network: 0,
+      uptime: 0, platform: 'unknown', hostname: 'unknown',
+      timestamp: new Date().toISOString(), error: error.message
     };
   }
 }
 
-// Mock user data
-let users = [
-  { 
-    id: 1, 
-    name: 'John Doe', 
-    email: 'john@example.com', 
-    role: 'admin', 
-    status: 'active', 
-    lastLogin: new Date().toISOString(),
-    createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  { 
-    id: 2, 
-    name: 'Jane Smith', 
-    email: 'jane@example.com', 
-    role: 'user', 
-    status: 'active', 
-    lastLogin: new Date(Date.now() - 86400000).toISOString(),
-    createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  { 
-    id: 3, 
-    name: 'Bob Wilson', 
-    email: 'bob@example.com', 
-    role: 'user', 
-    status: 'inactive', 
-    lastLogin: new Date(Date.now() - 172800000).toISOString(),
-    createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  }
-];
-
-// Health check endpoint
+// Health check endpoints
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    version: '1.0.0'
+    version: '2.0.0',
+    database: 'connected'
   });
 });
 
-// API health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'connected';
+  try {
+    await pool.query('SELECT 1');
+  } catch (error) {
+    dbStatus = 'error';
+  }
+  
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     services: {
       api: 'operational',
       websocket: 'active',
-      database: 'connected'
+      database: dbStatus
     }
   });
 });
 
 // Metrics endpoint
-app.get('/api/metrics', (req, res) => {
+app.get('/api/metrics', async (req, res) => {
   try {
-    const metrics = getSimpleMetrics();
-    res.json(metrics);
+    const currentMetrics = getSystemMetrics();
+    
+    // Also get latest stored metrics from database
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM metrics ORDER BY created_at DESC LIMIT 10');
+    client.release();
+    
+    res.json({
+      current: currentMetrics,
+      history: result.rows,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     console.error('Error in /api/metrics:', error);
     res.status(500).json({ 
@@ -128,99 +123,170 @@ app.get('/api/metrics', (req, res) => {
   }
 });
 
-// User management endpoints
-app.get('/api/users', (req, res) => {
+// Database-backed user management endpoints
+app.get('/api/users', async (req, res) => {
   try {
-    console.log('GET /api/users - returning', users.length, 'users');
-    res.json(users);
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM users ORDER BY created_at DESC');
+    client.release();
+    
+    console.log(`GET /api/users - returning ${result.rows.length} users`);
+    res.json(result.rows);
   } catch (error) {
     console.error('Error in GET /api/users:', error);
-    res.status(500).json({ error: 'Failed to fetch users' });
+    res.status(500).json({ error: 'Failed to fetch users', message: error.message });
   }
 });
 
-app.post('/api/users', (req, res) => {
+app.post('/api/users', async (req, res) => {
   try {
-    console.log('POST /api/users - creating user:', req.body);
-    
     const { name, email, role = 'user', status = 'active' } = req.body;
     
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email are required' });
     }
 
-    if (users.find(u => u.email === email)) {
+    const client = await pool.connect();
+    
+    // Check if email exists
+    const existingUser = await client.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.rows.length > 0) {
+      client.release();
       return res.status(400).json({ error: 'Email already exists' });
     }
 
-    const newUser = {
-      id: Math.max(...users.map(u => u.id), 0) + 1,
-      name,
-      email,
-      role,
-      status,
-      lastLogin: new Date().toISOString(),
-      createdAt: new Date().toISOString()
-    };
+    // Insert new user
+    const result = await client.query(`
+      INSERT INTO users (name, email, role, status, last_login, created_at) 
+      VALUES ($1, $2, $3, $4, NOW(), NOW()) 
+      RETURNING *
+    `, [name, email, role, status]);
     
-    users.push(newUser);
-    console.log('User created:', newUser.name);
-    res.status(201).json(newUser);
+    client.release();
+    
+    console.log('User created:', result.rows[0].name);
+    res.status(201).json(result.rows[0]);
   } catch (error) {
     console.error('Error in POST /api/users:', error);
-    res.status(500).json({ error: 'Failed to create user' });
+    res.status(500).json({ error: 'Failed to create user', message: error.message });
   }
 });
 
-app.put('/api/users/:id', (req, res) => {
+app.put('/api/users/:id', async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
-    console.log('PUT /api/users/' + userId);
+    const { name, email, role, status } = req.body;
     
-    const userIndex = users.findIndex(u => u.id === userId);
-    if (userIndex === -1) {
+    const client = await pool.connect();
+    
+    // Check if user exists
+    const existingUser = await client.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (existingUser.rows.length === 0) {
+      client.release();
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { email } = req.body;
-    if (email && email !== users[userIndex].email) {
-      if (users.find(u => u.email === email && u.id !== userId)) {
+    // Check if email is taken by another user
+    if (email && email !== existingUser.rows[0].email) {
+      const emailCheck = await client.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email, userId]);
+      if (emailCheck.rows.length > 0) {
+        client.release();
         return res.status(400).json({ error: 'Email already exists' });
       }
     }
 
-    users[userIndex] = { 
-      ...users[userIndex], 
-      ...req.body,
-      updatedAt: new Date().toISOString()
-    };
+    // Update user
+    const result = await client.query(`
+      UPDATE users 
+      SET name = COALESCE($1, name), email = COALESCE($2, email), 
+          role = COALESCE($3, role), status = COALESCE($4, status),
+          updated_at = NOW()
+      WHERE id = $5 
+      RETURNING *
+    `, [name, email, role, status, userId]);
     
-    console.log('User updated:', users[userIndex].name);
-    res.json(users[userIndex]);
+    client.release();
+    
+    console.log('User updated:', result.rows[0].name);
+    res.json(result.rows[0]);
   } catch (error) {
     console.error('Error in PUT /api/users/:id:', error);
-    res.status(500).json({ error: 'Failed to update user' });
+    res.status(500).json({ error: 'Failed to update user', message: error.message });
   }
 });
 
-app.delete('/api/users/:id', (req, res) => {
+app.delete('/api/users/:id', async (req, res) => {
   try {
     const userId = parseInt(req.params.id);
-    console.log('DELETE /api/users/' + userId);
     
-    const userIndex = users.findIndex(u => u.id === userId);
-    if (userIndex === -1) {
+    const client = await pool.connect();
+    
+    // Get user before deletion
+    const existingUser = await client.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (existingUser.rows.length === 0) {
+      client.release();
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const deletedUser = users[userIndex];
-    users = users.filter(u => u.id !== userId);
+    // Delete user
+    await client.query('DELETE FROM users WHERE id = $1', [userId]);
+    client.release();
     
-    console.log('User deleted:', deletedUser.name);
-    res.json({ message: 'User deleted successfully', user: deletedUser });
+    console.log('User deleted:', existingUser.rows[0].name);
+    res.json({ message: 'User deleted successfully', user: existingUser.rows[0] });
   } catch (error) {
     console.error('Error in DELETE /api/users/:id:', error);
-    res.status(500).json({ error: 'Failed to delete user' });
+    res.status(500).json({ error: 'Failed to delete user', message: error.message });
+  }
+});
+
+// System info endpoint
+app.get('/api/system', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    const result = await client.query('SELECT * FROM system_info ORDER BY service_name');
+    client.release();
+    
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error in GET /api/system:', error);
+    res.status(500).json({ error: 'Failed to fetch system info', message: error.message });
+  }
+});
+
+// Database stats endpoint
+app.get('/api/stats', async (req, res) => {
+  try {
+    const client = await pool.connect();
+    
+    const userStats = await client.query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(*) FILTER (WHERE status = 'active') as active_users,
+        COUNT(*) FILTER (WHERE role = 'admin') as admin_users,
+        COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '7 days') as new_users_week
+      FROM users
+    `);
+    
+    const metricsStats = await client.query(`
+      SELECT 
+        COUNT(*) as total_metrics,
+        AVG(cpu_usage) as avg_cpu,
+        AVG(memory_usage) as avg_memory,
+        MAX(created_at) as last_metric
+      FROM metrics
+    `);
+    
+    client.release();
+    
+    res.json({
+      users: userStats.rows[0],
+      metrics: metricsStats.rows[0],
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in GET /api/stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats', message: error.message });
   }
 });
 
@@ -232,7 +298,7 @@ app.use('*', (req, res) => {
   });
 });
 
-// Simple WebSocket setup
+// Enhanced WebSocket setup with database integration
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: {
@@ -245,11 +311,24 @@ io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
   
   // Send initial metrics
-  socket.emit('metrics', getSimpleMetrics());
+  const initialMetrics = getSystemMetrics();
+  socket.emit('metrics', initialMetrics);
   
   // Send metrics every 5 seconds
-  const interval = setInterval(() => {
-    socket.emit('metrics', getSimpleMetrics());
+  const interval = setInterval(async () => {
+    const currentMetrics = getSystemMetrics();
+    socket.emit('metrics', currentMetrics);
+    
+    // Also emit user count updates
+    try {
+      const client = await pool.connect();
+      const userCount = await client.query('SELECT COUNT(*) FROM users');
+      client.release();
+      
+      socket.emit('userCount', parseInt(userCount.rows[0].count));
+    } catch (error) {
+      console.error('Error getting user count:', error);
+    }
   }, 5000);
   
   socket.on('disconnect', () => {
@@ -262,14 +341,17 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log('=====================================');
-  console.log('🚀 CIS Operations Backend Started');
+  console.log('🚀 CIS Operations Backend v2.0 Started');
   console.log(`Server running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
-  console.log(`API endpoints available:`);
+  console.log(`Database: PostgreSQL`);
+  console.log(`Enhanced API endpoints:`);
   console.log(`  GET  /api/metrics`);
   console.log(`  GET  /api/users`);
   console.log(`  POST /api/users`);
   console.log(`  PUT  /api/users/:id`);
   console.log(`  DELETE /api/users/:id`);
+  console.log(`  GET  /api/system`);
+  console.log(`  GET  /api/stats`);
   console.log('=====================================');
 });

@@ -1,3 +1,5 @@
+# 6. Updated Backend Deployment with Database Connection
+# k8s/manifests/backend-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +19,7 @@ spec:
     spec:
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:6557288be026c36c26e47953c7584cd6c4e0fc1b
+        image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
         ports:
         - containerPort: 4000
         env:
@@ -25,6 +27,16 @@ spec:
           value: "production"
         - name: PORT
           value: "4000"
+        - name: DB_HOST
+          value: "postgres-service"
+        - name: DB_USER
+          value: "cisops"
+        - name: DB_PASSWORD
+          value: "cisops123"
+        - name: DB_NAME
+          value: "cisops"
+        - name: DB_PORT
+          value: "5432"
         resources:
           requests:
             memory: "256Mi"
@@ -36,11 +48,11 @@ spec:
           httpGet:
             path: /health
             port: 4000
-          initialDelaySeconds: 30
+          initialDelaySeconds: 45
           periodSeconds: 10
         readinessProbe:
           httpGet:
             path: /health
             port: 4000
-          initialDelaySeconds: 15
+          initialDelaySeconds: 30
           periodSeconds: 5

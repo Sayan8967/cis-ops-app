@@ -1,11 +1,11 @@
-# .github/workflows/ci.yml - Streamlined CI/CD Pipeline with Fixed Trivy Scanning
-name: CI/CD Pipeline
+# .github/workflows/ci.yml - Complete CI/CD Pipeline with Database Support
+name: CI/CD Pipeline with Database
 
 on:
   push:
-    branches: [release, main, develop]
+    branches: [releaseV2]
   pull_request:
-    branches: [release, main]
+    branches: [releaseV2]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -142,7 +142,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Update Kubernetes manifests
+      - name: Update Kubernetes manifests with Database Support
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -160,7 +160,88 @@ jobs:
               app.kubernetes.io/name: cis-ops
           EOF
 
-          # Backend Deployment
+          # PostgreSQL Deployment
+          cat > k8s/manifests/postgres-deployment.yaml << 'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postgres
+            namespace: cis-ops
+            labels:
+              app: postgres
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: postgres
+            template:
+              metadata:
+                labels:
+                  app: postgres
+              spec:
+                containers:
+                - name: postgres
+                  image: postgres:15-alpine
+                  env:
+                  - name: POSTGRES_DB
+                    value: "cisops"
+                  - name: POSTGRES_USER
+                    value: "cisops"
+                  - name: POSTGRES_PASSWORD
+                    value: "cisops123"
+                  - name: PGDATA
+                    value: /var/lib/postgresql/data/pgdata
+                  ports:
+                  - containerPort: 5432
+                  volumeMounts:
+                  - name: postgres-storage
+                    mountPath: /var/lib/postgresql/data
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "200m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+                  livenessProbe:
+                    exec:
+                      command:
+                      - pg_isready
+                      - -U
+                      - cisops
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                  readinessProbe:
+                    exec:
+                      command:
+                      - pg_isready
+                      - -U
+                      - cisops
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                volumes:
+                - name: postgres-storage
+                  emptyDir: {}
+          EOF
+
+          # PostgreSQL Service
+          cat > k8s/manifests/postgres-service.yaml << 'EOF'
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-service
+            namespace: cis-ops
+            labels:
+              app: postgres
+          spec:
+            selector:
+              app: postgres
+            ports:
+            - port: 5432
+              targetPort: 5432
+          EOF
+
+          # Backend Deployment with Database Connection
           cat > k8s/manifests/backend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -189,6 +270,16 @@ jobs:
                     value: "production"
                   - name: PORT
                     value: "4000"
+                  - name: DB_HOST
+                    value: "postgres-service"
+                  - name: DB_USER
+                    value: "cisops"
+                  - name: DB_PASSWORD
+                    value: "cisops123"
+                  - name: DB_NAME
+                    value: "cisops"
+                  - name: DB_PORT
+                    value: "5432"
                   resources:
                     requests:
                       memory: "256Mi"
@@ -200,13 +291,13 @@ jobs:
                     httpGet:
                       path: /health
                       port: 4000
-                    initialDelaySeconds: 30
+                    initialDelaySeconds: 45
                     periodSeconds: 10
                   readinessProbe:
                     httpGet:
                       path: /health
                       port: 4000
-                    initialDelaySeconds: 15
+                    initialDelaySeconds: 30
                     periodSeconds: 5
           EOF
 
@@ -324,14 +415,32 @@ jobs:
         run: |
           git add k8s/
           if ! git diff --staged --quiet; then
-            git commit -m "Deploy ${{ github.sha }}"
+            git commit -m "Deploy ${{ github.sha }} with Database Support"
             git push origin ${{ github.ref_name }}
           fi
 
       - name: Deployment summary
         run: |
-          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Complete with Database" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Backend URL**: http://mydevopsproject.live:30400" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend URL**: http://mydevopsproject.live:30080" >> $GITHUB_STEP_SUMMARY
+          echo "- **Database**: PostgreSQL 15-alpine" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🌐 Application URLs:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend**: http://mydevopsproject.live:30080" >> $GITHUB_STEP_SUMMARY
+          echo "- **Backend API**: http://mydevopsproject.live:30400" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check**: http://mydevopsproject.live:30400/health" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 New API Endpoints:" >> $GITHUB_STEP_SUMMARY
+          echo "- \`GET /api/users\` - Database-backed user management" >> $GITHUB_STEP_SUMMARY
+          echo "- \`GET /api/metrics\` - System metrics with history" >> $GITHUB_STEP_SUMMARY
+          echo "- \`GET /api/stats\` - Database statistics" >> $GITHUB_STEP_SUMMARY
+          echo "- \`GET /api/system\` - System information" >> $GITHUB_STEP_SUMMARY
+          echo "- \`GET /api/health\` - Enhanced health check with DB status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Database Features:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Persistent user storage" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Metrics history logging" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ System information tracking" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Real-time WebSocket with DB integration" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Automatic database initialization with sample data" >> $GITHUB_STEP_SUMMARY
