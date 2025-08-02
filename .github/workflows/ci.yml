@@ -1,11 +1,11 @@
-# .github/workflows/ci.yml - Complete CI/CD Pipeline with Database Support
+# .github/workflows/ci.yml - Fixed CI/CD Pipeline with Proper Variable Substitution
 name: CI/CD Pipeline with Database
 
 on:
   push:
-    branches: [releaseV2]
+    branches: [release, main, develop]
   pull_request:
-    branches: [releaseV2]
+    branches: [release, main]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -149,6 +149,18 @@ jobs:
           
           mkdir -p k8s/manifests
 
+          # Set variables for substitution
+          DOCKER_REGISTRY="${{ env.DOCKER_REGISTRY }}"
+          BACKEND_IMAGE="${{ env.BACKEND_IMAGE }}"
+          FRONTEND_IMAGE="${{ env.FRONTEND_IMAGE }}"
+          COMMIT_SHA="${{ github.sha }}"
+          
+          echo "Deploying with:"
+          echo "Registry: $DOCKER_REGISTRY"
+          echo "Backend: $BACKEND_IMAGE"
+          echo "Frontend: $FRONTEND_IMAGE"
+          echo "Commit: $COMMIT_SHA"
+
           # Namespace
           cat > k8s/manifests/namespace.yaml << 'EOF'
           apiVersion: v1
@@ -241,7 +253,7 @@ jobs:
               targetPort: 5432
           EOF
 
-          # Backend Deployment with Database Connection
+          # Backend Deployment with Database Connection - FIXED VARIABLE SUBSTITUTION
           cat > k8s/manifests/backend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -262,7 +274,7 @@ jobs:
               spec:
                 containers:
                 - name: backend
-                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+                  image: ${DOCKER_REGISTRY}/${BACKEND_IMAGE}:${COMMIT_SHA}
                   ports:
                   - containerPort: 4000
                   env:
@@ -301,7 +313,7 @@ jobs:
                     periodSeconds: 5
           EOF
 
-          # Frontend Deployment
+          # Frontend Deployment - FIXED VARIABLE SUBSTITUTION
           cat > k8s/manifests/frontend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -322,7 +334,7 @@ jobs:
               spec:
                 containers:
                 - name: frontend
-                  image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+                  image: ${DOCKER_REGISTRY}/${FRONTEND_IMAGE}:${COMMIT_SHA}
                   ports:
                   - containerPort: 80
                   env:
@@ -411,11 +423,17 @@ jobs:
               - CreateNamespace=true
           EOF
 
+          # Verify generated manifests
+          echo "=== Generated Backend Deployment ==="
+          head -20 k8s/manifests/backend-deployment.yaml
+          echo "=== Generated Frontend Deployment ==="
+          head -20 k8s/manifests/frontend-deployment.yaml
+
       - name: Commit and push changes
         run: |
           git add k8s/
           if ! git diff --staged --quiet; then
-            git commit -m "Deploy ${{ github.sha }} with Database Support"
+            git commit -m "Deploy ${{ github.sha }} with Database Support - Fixed Variable Substitution"
             git push origin ${{ github.ref_name }}
           fi
 
