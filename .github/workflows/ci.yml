@@ -15,8 +15,6 @@ env:
 jobs:
   build-backend:
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,8 +48,6 @@ jobs:
 
   build-frontend:
     runs-on: ubuntu-latest
-    outputs:
-      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -92,37 +88,52 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  security-scan:
-    needs: [build-backend, build-frontend]
+  security-scan-backend:
+    needs: build-backend
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - image: ${{ needs.build-backend.outputs.image-tag }}
-            name: backend
-          - image: ${{ needs.build-frontend.outputs.image-tag }}
-            name: frontend
     steps:
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner (Backend)
         uses: aquasecurity/trivy-action@0.15.0
         with:
-          image-ref: ${{ matrix.image }}
+          image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}'
           format: 'sarif'
-          output: 'trivy-${{ matrix.name }}-results.sarif'
+          output: 'trivy-backend-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '0'
         env:
           TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
-      - name: Upload Trivy scan results
+      - name: Upload Trivy scan results (Backend)
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: 'trivy-${{ matrix.name }}-results.sarif'
+          sarif_file: 'trivy-backend-results.sarif'
+
+  security-scan-frontend:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Trivy vulnerability scanner (Frontend)
+        uses: aquasecurity/trivy-action@0.15.0
+        with:
+          image-ref: '${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-frontend-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+        env:
+          TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
+
+      - name: Upload Trivy scan results (Frontend)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-frontend-results.sarif'
 
   deploy:
-    needs: [security-scan]
+    needs: [security-scan-backend, security-scan-frontend]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/release' || github.ref == 'refs/heads/main'
     steps:
