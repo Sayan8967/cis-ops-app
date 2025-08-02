@@ -339,11 +339,12 @@ io.on('connection', (socket) => {
 
 // Start server
 const PORT = process.env.PORT || 4000;
+const HOST = '0.0.0.0';
 server.listen(PORT, () => {
   console.log('=====================================');
   console.log('🚀 CIS Operations Backend v2.0 Started');
   console.log(`Server running on port ${PORT}`);
-  console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Health check: http://${HOST}:${PORT}/health`);
   console.log(`Database: PostgreSQL`);
   console.log(`Enhanced API endpoints:`);
   console.log(`  GET  /api/metrics`);
