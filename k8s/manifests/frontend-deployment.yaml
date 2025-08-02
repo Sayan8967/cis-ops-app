@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cis-ops-frontend
+  namespace: cis-ops
+  labels:
+    app: cis-ops-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cis-ops-frontend
+  template:
+    metadata:
+      labels:
+        app: cis-ops-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: docker.io/sayan896/cis-ops-frontend:6557288be026c36c26e47953c7584cd6c4e0fc1b
+        ports:
+        - containerPort: 80
+        env:
+        - name: REACT_APP_BACKEND_URL
+          value: "http://mydevopsproject.live:30400"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 15
+          periodSeconds: 5
