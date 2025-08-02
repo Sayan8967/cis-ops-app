@@ -135,7 +135,7 @@ jobs:
   deploy:
     needs: [security-scan-backend, security-scan-frontend]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/release' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/releaseV2' || github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
         with:
