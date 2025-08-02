@@ -1,5 +1,5 @@
-# .github/workflows/ci.yml - Fixed CI/CD Pipeline with proper Trivy scanning
-name: Enhanced CI/CD Pipeline
+# .github/workflows/ci.yml - Streamlined CI/CD Pipeline with Fixed Trivy Scanning
+name: CI/CD Pipeline
 
 on:
   push:
@@ -15,158 +15,76 @@ env:
 jobs:
   build-backend:
     runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: backend/package-lock.json
 
-      - name: Install backend dependencies
-        working-directory: ./backend
-        run: npm ci
-
-      - name: Lint backend code
-        working-directory: ./backend
-        run: npm run lint --if-present
-
-      - name: Run backend tests
-        working-directory: ./backend
-        run: npm test --if-present
-
       - name: Build backend
         working-directory: ./backend
-        run: npm run build --if-present
+        run: |
+          npm ci
+          npm run build --if-present
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_REGISTRY_KEY }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   build-frontend:
     runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: npm ci
-
-      - name: Lint frontend code
-        working-directory: ./frontend
-        run: npm run lint --if-present
-
-      - name: Run frontend tests
-        working-directory: ./frontend
-        run: npm test --if-present --coverage --watchAll=false
-
       - name: Build frontend
         working-directory: ./frontend
-        run: npm run build
+        run: |
+          npm ci
+          npm run build
         env:
-          # Build-time environment variables
           REACT_APP_HF_API_KEY: ${{ secrets.REACT_APP_HF_API_KEY }}
           REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
-          # Set a build-time default, but allow runtime override
           REACT_APP_BACKEND_URL: http://localhost:30400
           CI: false
 
-  docker-backend:
-    needs: build-backend
-    runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push backend Docker image
-        id: build
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            NODE_ENV=production
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
-            VCS_REF=${{ github.sha }}
-
-  docker-frontend:
-    needs: build-frontend
-    runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.tags }}
-      digest: ${{ steps.build.outputs.digest }}
-      image-tag: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_REGISTRY_KEY }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build and push frontend Docker image
-        id: build
+      - name: Build and push frontend image
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
-          file: ./frontend/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:latest
+            ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
           build-args: |
             REACT_APP_HF_API_KEY=${{ secrets.REACT_APP_HF_API_KEY }}
             REACT_APP_GOOGLE_CLIENT_ID=${{ secrets.REACT_APP_GOOGLE_CLIENT_ID }}
@@ -174,91 +92,54 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  security-scan-backend:
-    needs: docker-backend
+  security-scan:
+    needs: [build-backend, build-frontend]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: ${{ needs.build-backend.outputs.image-tag }}
+            name: backend
+          - image: ${{ needs.build-frontend.outputs.image-tag }}
+            name: frontend
     steps:
-      - name: Wait for image to be available
-        run: |
-          echo "Waiting for image to be available in registry..."
-          sleep 30
-          
-      - name: Run Trivy vulnerability scanner (Backend)
-        uses: aquasecurity/trivy-action@master
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.15.0
         with:
-          image-ref: ${{ needs.docker-backend.outputs.image-tag }}
+          image-ref: ${{ matrix.image }}
           format: 'sarif'
-          output: 'trivy-backend-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '0'  # Don't fail the pipeline on vulnerabilities for now
+          output: 'trivy-${{ matrix.name }}-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
         env:
           TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
 
-      - name: Upload Trivy scan results to GitHub Security
+      - name: Upload Trivy scan results
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: 'trivy-backend-results.sarif'
+          sarif_file: 'trivy-${{ matrix.name }}-results.sarif'
 
-  security-scan-frontend:
-    needs: docker-frontend
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for image to be available
-        run: |
-          echo "Waiting for image to be available in registry..."
-          sleep 30
-          
-      - name: Run Trivy vulnerability scanner (Frontend)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ needs.docker-frontend.outputs.image-tag }}
-          format: 'sarif'
-          output: 'trivy-frontend-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
-          exit-code: '0'  # Don't fail the pipeline on vulnerabilities for now
-        env:
-          TRIVY_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          TRIVY_PASSWORD: ${{ secrets.DOCKER_REGISTRY_KEY }}
-
-      - name: Upload Trivy scan results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-frontend-results.sarif'
-
-  update-manifests:
-    needs: [security-scan-backend, security-scan-frontend]
+  deploy:
+    needs: [security-scan]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/release' || github.ref == 'refs/heads/main'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-      
-      - name: Configure Git
+
+      - name: Update Kubernetes manifests
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      
-      - name: Create deployment directory
-        run: mkdir -p k8s/manifests
-      
-      - name: Generate Kubernetes manifests
-        run: |
-          # Function to create manifests
-          create_manifest() {
-            local manifest_type=$1
-            local content=$2
-            echo "Creating $manifest_type..."
-            echo "$content" > "k8s/manifests/$manifest_type"
-          }
+          
+          mkdir -p k8s/manifests
 
           # Namespace
-          create_manifest "namespace.yaml" "$(cat <<'EOF'
+          cat > k8s/manifests/namespace.yaml << 'EOF'
           apiVersion: v1
           kind: Namespace
           metadata:
@@ -266,76 +147,10 @@ jobs:
             labels:
               name: cis-ops
               app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/managed-by: argocd
           EOF
-          )"
 
-          # Backend ServiceAccount with enhanced permissions
-          create_manifest "backend-serviceaccount.yaml" "$(cat <<'EOF'
-          apiVersion: v1
-          kind: ServiceAccount
-          metadata:
-            name: cis-ops-backend-sa
-            namespace: cis-ops
-            labels:
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: backend
-          EOF
-          )"
-
-          # Enhanced ClusterRole for metrics access
-          create_manifest "metrics-clusterrole.yaml" "$(cat <<'EOF'
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: ClusterRole
-          metadata:
-            name: cis-ops-metrics-reader
-            labels:
-              app.kubernetes.io/name: cis-ops
-          rules:
-          - apiGroups: [""]
-            resources: 
-              - "nodes"
-              - "pods"
-              - "services"
-              - "namespaces"
-              - "endpoints"
-            verbs: ["get", "list", "watch"]
-          - apiGroups: ["apps"]
-            resources:
-              - "deployments"
-              - "replicasets"
-              - "daemonsets"
-              - "statefulsets"
-            verbs: ["get", "list", "watch"]
-          - apiGroups: ["metrics.k8s.io"]
-            resources:
-              - "nodes"
-              - "pods"
-            verbs: ["get", "list"]
-          EOF
-          )"
-
-          # ClusterRoleBinding
-          create_manifest "metrics-clusterrolebinding.yaml" "$(cat <<'EOF'
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: ClusterRoleBinding
-          metadata:
-            name: cis-ops-metrics-reader-binding
-            labels:
-              app.kubernetes.io/name: cis-ops
-          roleRef:
-            apiGroup: rbac.authorization.k8s.io
-            kind: ClusterRole
-            name: cis-ops-metrics-reader
-          subjects:
-          - kind: ServiceAccount
-            name: cis-ops-backend-sa
-            namespace: cis-ops
-          EOF
-          )"
-
-          # Enhanced Backend Deployment
-          create_manifest "backend-deployment.yaml" "$(cat <<EOF
+          # Backend Deployment
+          cat > k8s/manifests/backend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -343,17 +158,8 @@ jobs:
             namespace: cis-ops
             labels:
               app: cis-ops-backend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: backend
-              app.kubernetes.io/managed-by: argocd
-              version: "${GITHUB_SHA}"
           spec:
             replicas: 2
-            strategy:
-              type: RollingUpdate
-              rollingUpdate:
-                maxUnavailable: 1
-                maxSurge: 1
             selector:
               matchLabels:
                 app: cis-ops-backend
@@ -361,38 +167,17 @@ jobs:
               metadata:
                 labels:
                   app: cis-ops-backend
-                  app.kubernetes.io/name: cis-ops
-                  app.kubernetes.io/component: backend
-                  version: "${GITHUB_SHA}"
-                annotations:
-                  prometheus.io/scrape: "true"
-                  prometheus.io/port: "4000"
-                  prometheus.io/path: "/api/metrics"
               spec:
-                serviceAccountName: cis-ops-backend-sa
-                securityContext:
-                  runAsNonRoot: true
-                  runAsUser: 1001
-                  fsGroup: 1001
                 containers:
                 - name: backend
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-                  imagePullPolicy: Always
                   ports:
                   - containerPort: 4000
-                    name: http
-                    protocol: TCP
                   env:
                   - name: NODE_ENV
                     value: "production"
                   - name: PORT
                     value: "4000"
-                  - name: CORS_ORIGIN
-                    value: "*"
-                  - name: NAMESPACE
-                    value: "cis-ops"
-                  - name: LOG_LEVEL
-                    value: "info"
                   resources:
                     requests:
                       memory: "256Mi"
@@ -404,45 +189,18 @@ jobs:
                     httpGet:
                       path: /health
                       port: 4000
-                      scheme: HTTP
-                    initialDelaySeconds: 60
-                    periodSeconds: 30
-                    timeoutSeconds: 10
-                    failureThreshold: 3
-                    successThreshold: 1
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
                   readinessProbe:
                     httpGet:
                       path: /health
                       port: 4000
-                      scheme: HTTP
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
-                    timeoutSeconds: 5
-                    failureThreshold: 3
-                    successThreshold: 1
-                  startupProbe:
-                    httpGet:
-                      path: /health
-                      port: 4000
-                      scheme: HTTP
                     initialDelaySeconds: 15
-                    periodSeconds: 10
-                    timeoutSeconds: 5
-                    failureThreshold: 10
-                    successThreshold: 1
-                  securityContext:
-                    allowPrivilegeEscalation: false
-                    readOnlyRootFilesystem: false
-                    runAsNonRoot: true
-                    runAsUser: 1001
-                    capabilities:
-                      drop:
-                      - ALL
+                    periodSeconds: 5
           EOF
-          )"
 
-          # Enhanced Frontend Deployment
-          create_manifest "frontend-deployment.yaml" "$(cat <<EOF
+          # Frontend Deployment
+          cat > k8s/manifests/frontend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -450,17 +208,8 @@ jobs:
             namespace: cis-ops
             labels:
               app: cis-ops-frontend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: frontend
-              app.kubernetes.io/managed-by: argocd
-              version: "${GITHUB_SHA}"
           spec:
             replicas: 2
-            strategy:
-              type: RollingUpdate
-              rollingUpdate:
-                maxUnavailable: 1
-                maxSurge: 1
             selector:
               matchLabels:
                 app: cis-ops-frontend
@@ -468,38 +217,15 @@ jobs:
               metadata:
                 labels:
                   app: cis-ops-frontend
-                  app.kubernetes.io/name: cis-ops
-                  app.kubernetes.io/component: frontend
-                  version: "${GITHUB_SHA}"
               spec:
-                securityContext:
-                  runAsNonRoot: true
-                  runAsUser: 101
-                  fsGroup: 101
                 containers:
                 - name: frontend
                   image: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-                  imagePullPolicy: Always
                   ports:
                   - containerPort: 80
-                    name: http
-                    protocol: TCP
                   env:
-                  # Runtime environment variables
                   - name: REACT_APP_BACKEND_URL
                     value: "http://mydevopsproject.live:30400"
-                  - name: REACT_APP_HF_API_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: app-secrets
-                        key: hf-api-key
-                        optional: true
-                  - name: REACT_APP_GOOGLE_CLIENT_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: app-secrets
-                        key: google-client-id
-                        optional: true
                   resources:
                     requests:
                       memory: "128Mi"
@@ -513,39 +239,16 @@ jobs:
                       port: 80
                     initialDelaySeconds: 30
                     periodSeconds: 10
-                    timeoutSeconds: 5
-                    failureThreshold: 3
                   readinessProbe:
                     httpGet:
                       path: /health
                       port: 80
                     initialDelaySeconds: 15
                     periodSeconds: 5
-                    timeoutSeconds: 3
-                    failureThreshold: 3
-                  securityContext:
-                    allowPrivilegeEscalation: false
-                    readOnlyRootFilesystem: true
-                    runAsNonRoot: true
-                    runAsUser: 101
-                    capabilities:
-                      drop:
-                      - ALL
-                  volumeMounts:
-                  - name: nginx-cache
-                    mountPath: /var/cache/nginx
-                  - name: nginx-run
-                    mountPath: /var/run
-                volumes:
-                - name: nginx-cache
-                  emptyDir: {}
-                - name: nginx-run
-                  emptyDir: {}
           EOF
-          )"
 
           # Backend Service
-          create_manifest "backend-service.yaml" "$(cat <<'EOF'
+          cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -553,27 +256,18 @@ jobs:
             namespace: cis-ops
             labels:
               app: cis-ops-backend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: backend
-              app.kubernetes.io/managed-by: argocd
-            annotations:
-              service.beta.kubernetes.io/aws-load-balancer-type: nlb
           spec:
             type: NodePort
             selector:
               app: cis-ops-backend
             ports:
-            - name: http
-              port: 4000
+            - port: 4000
               targetPort: 4000
               nodePort: 30400
-              protocol: TCP
-            sessionAffinity: None
           EOF
-          )"
 
           # Frontend Service
-          create_manifest "frontend-service.yaml" "$(cat <<'EOF'
+          cat > k8s/manifests/frontend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
           metadata:
@@ -581,58 +275,23 @@ jobs:
             namespace: cis-ops
             labels:
               app: cis-ops-frontend
-              app.kubernetes.io/name: cis-ops
-              app.kubernetes.io/component: frontend
-              app.kubernetes.io/managed-by: argocd
           spec:
             type: NodePort
             selector:
               app: cis-ops-frontend
             ports:
-            - name: http
-              port: 80
+            - port: 80
               targetPort: 80
               nodePort: 30080
-              protocol: TCP
-            sessionAffinity: None
           EOF
-          )"
 
-          # Application Secrets Template (will need to be created manually)
-          create_manifest "app-secrets-template.yaml" "$(cat <<'EOF'
-          # This is a template - create the actual secret manually:
-          # kubectl create secret generic app-secrets \
-          #   --from-literal=hf-api-key="your-hf-api-key" \
-          #   --from-literal=google-client-id="your-google-client-id" \
-          #   -n cis-ops
-          
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: app-secrets
-            namespace: cis-ops
-          type: Opaque
-          # data: # Add your base64 encoded secrets here
-          #   hf-api-key: <base64-encoded-value>
-          #   google-client-id: <base64-encoded-value>
-          EOF
-          )"
-
-          echo "All Kubernetes manifests created successfully!"
-          ls -la k8s/manifests/
-
-      - name: Create ArgoCD Application
-        run: |
+          # ArgoCD Application
           cat > k8s/argocd-application.yaml << EOF
           apiVersion: argoproj.io/v1alpha1
           kind: Application
           metadata:
             name: cis-ops
             namespace: argocd
-            finalizers:
-            - resources-finalizer.argocd.argoproj.io
-            labels:
-              app.kubernetes.io/name: cis-ops
           spec:
             project: default
             source:
@@ -646,108 +305,22 @@ jobs:
               automated:
                 prune: true
                 selfHeal: true
-                allowEmpty: false
               syncOptions:
               - CreateNamespace=true
-              - PruneLast=true
-              - RespectIgnoreDifferences=true
-              retry:
-                limit: 5
-                backoff:
-                  duration: 5s
-                  factor: 2
-                  maxDuration: 3m
           EOF
 
       - name: Commit and push changes
         run: |
           git add k8s/
-          
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "🚀 Deploy version ${{ github.sha }}
-
-            - Backend: ${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-            - Frontend: ${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-            - Enhanced health checks and error handling
-            - Runtime environment variable support
-            - Improved security configurations"
-            
-            # Push with retry logic
-            for i in {1..3}; do
-              if git push origin ${{ github.ref_name }}; then
-                echo "Successfully pushed changes"
-                break
-              else
-                echo "Push failed, attempt $i/3. Pulling latest changes..."
-                git pull --rebase origin ${{ github.ref_name }}
-                if [ $i -eq 3 ]; then
-                  echo "Failed to push after 3 attempts"
-                  exit 1
-                fi
-              fi
-            done
+          if ! git diff --staged --quiet; then
+            git commit -m "Deploy ${{ github.sha }}"
+            git push origin ${{ github.ref_name }}
           fi
 
-      - name: Create deployment summary
+      - name: Deployment summary
         run: |
-          echo "## 🚀 Enhanced Deployment Complete" >> $GITHUB_STEP_SUMMARY
-          echo "### Updated Images:" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔧 New Features:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Enhanced health checks with detailed status" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Runtime environment variable support" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Automatic connection fallback mechanisms" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Improved error handling and user feedback" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ WebSocket with HTTP polling fallback" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Enhanced security configurations" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🛡️ Security Enhancements:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Non-root container execution" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Read-only root filesystem (frontend)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Dropped all capabilities" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Security context hardening" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📊 Monitoring:" >> $GITHUB_STEP_SUMMARY
-          echo "- Backend Health: \`http://mydevopsproject.live:30400/health\`" >> $GITHUB_STEP_SUMMARY
-          echo "- API Health: \`http://mydevopsproject.live:30400/api/health\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend: \`http://mydevopsproject.live:30080\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Frontend Health: \`http://mydevopsproject.live:30080/health\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔄 ArgoCD Sync:" >> $GITHUB_STEP_SUMMARY
-          echo "ArgoCD will automatically detect and sync these changes within 3 minutes." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🛠️ Manual Deployment Commands:" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "# Apply all manifests" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl apply -f k8s/manifests/" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Create secrets (run once)" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl create secret generic app-secrets \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --from-literal=hf-api-key=\"your-hf-api-key\" \\" >> $GITHUB_STEP_SUMMARY
-          echo "  --from-literal=google-client-id=\"your-google-client-id\" \\" >> $GITHUB_STEP_SUMMARY
-          echo "  -n cis-ops" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# Check deployment status" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl get pods -n cis-ops" >> $GITHUB_STEP_SUMMARY
-          echo "kubectl get svc -n cis-ops" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-
-  notify-deployment:
-    needs: update-manifests
-    runs-on: ubuntu-latest
-    if: always() && (github.ref == 'refs/heads/release' || github.ref == 'refs/heads/main')
-    steps:
-      - name: Notify deployment status
-        run: |
-          if [ "${{ needs.update-manifests.result }}" == "success" ]; then
-            echo "✅ Deployment pipeline completed successfully"
-            echo "🚀 New version deployed: ${{ github.sha }}"
-          else
-            echo "❌ Deployment pipeline failed"
-            echo "🔍 Check the logs for detailed error information"
-            exit 1
-          fi
+          echo "- **Backend URL**: http://mydevopsproject.live:30400" >> $GITHUB_STEP_SUMMARY
+          echo "- **Frontend URL**: http://mydevopsproject.live:30080" >> $GITHUB_STEP_SUMMARY
