@@ -53,6 +53,11 @@ envsubst < /usr/share/nginx/html/runtime-env.js > /tmp/runtime-env.js
 mv /tmp/runtime-env.js /usr/share/nginx/html/runtime-env.js
 
 echo "Runtime environment configuration created"
+
+# Create a simple health check file as backup
+echo "healthy" > /usr/share/nginx/html/health.txt
+
+echo "Container initialization complete"
 EOF
 
 # Make the script executable
@@ -67,13 +72,16 @@ COPY --from=builder /app/build /usr/share/nginx/html
 # Update index.html to include runtime environment script
 RUN sed -i 's|<head>|<head>\n  <script src="/runtime-env.js"></script>|' /usr/share/nginx/html/index.html
 
-# Enhanced healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:80/ || exit 1
+# Create health check file as backup (in case nginx config fails)
+RUN echo "healthy" > /usr/share/nginx/html/health.txt
+
+# Enhanced healthcheck with multiple fallbacks
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:80/health || curl -f http://localhost:80/health.txt || curl -f http://localhost:80/ || exit 1
 
 # Labels for better container management
 LABEL maintainer="CIS Operations Team"
-LABEL version="2.0"
+LABEL version="2.1"
 LABEL description="CIS Operations Frontend with Runtime Environment Support"
 
 # Expose port 80

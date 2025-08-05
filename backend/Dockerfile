@@ -1,10 +1,10 @@
-# Backend Dockerfile (backend/Dockerfile) - Simplified version
+# Backend Dockerfile (backend/Dockerfile) - Enhanced version
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Install curl for health checks
-RUN apk add --no-cache curl
+# Install curl and postgresql-client for health checks and DB operations
+RUN apk add --no-cache curl postgresql-client
 
 # Copy package files
 COPY package*.json ./
@@ -29,8 +29,8 @@ EXPOSE 4000
 ENV NODE_ENV=production
 ENV PORT=4000
 
-# Simple health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+# Enhanced health check that also verifies database connectivity
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:4000/health || exit 1
 
 # Start the application

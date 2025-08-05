@@ -1,11 +1,11 @@
-# .github/workflows/ci.yml - Fixed CI/CD Pipeline with Proper Variable Substitution
+# .github/workflows/ci.yml - Improved CI/CD Pipeline
 name: CI/CD Pipeline with Database
 
 on:
   push:
-    branches: [releaseV2]
+    branches: [releaseV2, main]
   pull_request:
-    branches: [releaseV2]
+    branches: [releaseV2, main]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -172,7 +172,38 @@ jobs:
               app.kubernetes.io/name: cis-ops
           EOF
 
-          # PostgreSQL Deployment
+          # PostgreSQL PersistentVolume (ADDED - Important for data persistence)
+          cat > k8s/manifests/postgres-pv.yaml << 'EOF'
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: postgres-pv
+            namespace: cis-ops
+          spec:
+            capacity:
+              storage: 5Gi
+            accessModes:
+              - ReadWriteOnce
+            persistentVolumeReclaimPolicy: Retain
+            storageClassName: local-storage
+            hostPath:
+              path: /tmp/postgres-data
+          ---
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: postgres-pvc
+            namespace: cis-ops
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 5Gi
+            storageClassName: local-storage
+          EOF
+
+          # PostgreSQL Deployment (IMPROVED - with persistent storage)
           cat > k8s/manifests/postgres-deployment.yaml << 'EOF'
           apiVersion: apps/v1
           kind: Deployment
@@ -183,6 +214,8 @@ jobs:
               app: postgres
           spec:
             replicas: 1
+            strategy:
+              type: Recreate  # Important for databases with persistent storage
             selector:
               matchLabels:
                 app: postgres
@@ -213,7 +246,7 @@ jobs:
                       memory: "256Mi"
                       cpu: "200m"
                     limits:
-                      memory: "512Mi"
+                      memory: "1Gi"  # Increased for better performance
                       cpu: "500m"
                   livenessProbe:
                     exec:
@@ -221,19 +254,28 @@ jobs:
                       - pg_isready
                       - -U
                       - cisops
+                      - -d
+                      - cisops
                     initialDelaySeconds: 30
                     periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
                   readinessProbe:
                     exec:
                       command:
                       - pg_isready
                       - -U
                       - cisops
+                      - -d
+                      - cisops
                     initialDelaySeconds: 5
                     periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
                 volumes:
                 - name: postgres-storage
-                  emptyDir: {}
+                  persistentVolumeClaim:
+                    claimName: postgres-pvc
           EOF
 
           # PostgreSQL Service
@@ -251,9 +293,39 @@ jobs:
             ports:
             - port: 5432
               targetPort: 5432
+            type: ClusterIP
           EOF
 
-          # Backend Deployment with Database Connection - FIXED VARIABLE SUBSTITUTION
+          # Backend ConfigMap for better configuration management
+          cat > k8s/manifests/backend-configmap.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: backend-config
+            namespace: cis-ops
+          data:
+            NODE_ENV: "production"
+            PORT: "4000"
+            DB_HOST: "postgres-service"
+            DB_PORT: "5432"
+            DB_NAME: "cisops"
+            DB_USER: "cisops"
+          EOF
+
+          # Backend Secret for sensitive data
+          cat > k8s/manifests/backend-secret.yaml << 'EOF'
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: backend-secret
+            namespace: cis-ops
+          type: Opaque
+          data:
+            # Base64 encoded "cisops123"
+            DB_PASSWORD: Y2lzb3BzMTIz
+          EOF
+
+          # Backend Deployment (IMPROVED - with proper health checks and dependencies)
           cat > k8s/manifests/backend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -272,26 +344,29 @@ jobs:
                 labels:
                   app: cis-ops-backend
               spec:
+                initContainers:
+                - name: wait-for-postgres
+                  image: postgres:15-alpine
+                  command: 
+                  - sh
+                  - -c
+                  - |
+                    until pg_isready -h postgres-service -p 5432 -U cisops; do
+                      echo "Waiting for PostgreSQL..."
+                      sleep 2
+                    done
+                    echo "PostgreSQL is ready!"
                 containers:
                 - name: backend
                   image: ${DOCKER_REGISTRY}/${BACKEND_IMAGE}:${COMMIT_SHA}
                   ports:
                   - containerPort: 4000
-                  env:
-                  - name: NODE_ENV
-                    value: "production"
-                  - name: PORT
-                    value: "4000"
-                  - name: DB_HOST
-                    value: "postgres-service"
-                  - name: DB_USER
-                    value: "cisops"
-                  - name: DB_PASSWORD
-                    value: "cisops123"
-                  - name: DB_NAME
-                    value: "cisops"
-                  - name: DB_PORT
-                    value: "5432"
+                    name: http
+                  envFrom:
+                  - configMapRef:
+                      name: backend-config
+                  - secretRef:
+                      name: backend-secret
                   resources:
                     requests:
                       memory: "256Mi"
@@ -303,17 +378,29 @@ jobs:
                     httpGet:
                       path: /health
                       port: 4000
-                    initialDelaySeconds: 45
+                    initialDelaySeconds: 60  # Increased for DB initialization
                     periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
                   readinessProbe:
                     httpGet:
                       path: /health
                       port: 4000
                     initialDelaySeconds: 30
                     periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
+                  startupProbe:  # Added startup probe for slow initialization
+                    httpGet:
+                      path: /health
+                      port: 4000
+                    initialDelaySeconds: 10
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 30
           EOF
 
-          # Frontend Deployment - FIXED VARIABLE SUBSTITUTION
+          # Frontend Deployment (IMPROVED - with better health checks)
           cat > k8s/manifests/frontend-deployment.yaml << EOF
           apiVersion: apps/v1
           kind: Deployment
@@ -337,6 +424,7 @@ jobs:
                   image: ${DOCKER_REGISTRY}/${FRONTEND_IMAGE}:${COMMIT_SHA}
                   ports:
                   - containerPort: 80
+                    name: http
                   env:
                   - name: REACT_APP_BACKEND_URL
                     value: "http://mydevopsproject.live:30400"
@@ -353,12 +441,24 @@ jobs:
                       port: 80
                     initialDelaySeconds: 30
                     periodSeconds: 10
+                    timeoutSeconds: 3
+                    failureThreshold: 3
                   readinessProbe:
                     httpGet:
                       path: /health
                       port: 80
-                    initialDelaySeconds: 15
+                    initialDelaySeconds: 10
                     periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 3
+                  startupProbe:
+                    httpGet:
+                      path: /health
+                      port: 80
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 6
           EOF
 
           # Backend Service
@@ -378,6 +478,7 @@ jobs:
             - port: 4000
               targetPort: 4000
               nodePort: 30400
+              name: http
           EOF
 
           # Frontend Service
@@ -397,6 +498,7 @@ jobs:
             - port: 80
               targetPort: 80
               nodePort: 30080
+              name: http
           EOF
 
           # ArgoCD Application
@@ -421,6 +523,7 @@ jobs:
                 selfHeal: true
               syncOptions:
               - CreateNamespace=true
+              - RespectIgnoreDifferences=true
           EOF
 
           # Verify generated manifests
@@ -433,32 +536,25 @@ jobs:
         run: |
           git add k8s/
           if ! git diff --staged --quiet; then
-            git commit -m "Deploy ${{ github.sha }} with Database Support - Fixed Variable Substitution"
+            git commit -m "Deploy ${{ github.sha }} - Enhanced K8s Configuration"
             git push origin ${{ github.ref_name }}
           fi
 
       - name: Deployment summary
         run: |
-          echo "## 🚀 Deployment Complete with Database" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Deployment Complete with Enhanced Configuration" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.BACKEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend**: \`${{ env.DOCKER_REGISTRY }}/${{ env.FRONTEND_IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Database**: PostgreSQL 15-alpine" >> $GITHUB_STEP_SUMMARY
+          echo "- **Database**: PostgreSQL 15-alpine with persistent storage" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🌐 Application URLs:" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend**: http://mydevopsproject.live:30080" >> $GITHUB_STEP_SUMMARY
           echo "- **Backend API**: http://mydevopsproject.live:30400" >> $GITHUB_STEP_SUMMARY
           echo "- **Health Check**: http://mydevopsproject.live:30400/health" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔗 New API Endpoints:" >> $GITHUB_STEP_SUMMARY
-          echo "- \`GET /api/users\` - Database-backed user management" >> $GITHUB_STEP_SUMMARY
-          echo "- \`GET /api/metrics\` - System metrics with history" >> $GITHUB_STEP_SUMMARY
-          echo "- \`GET /api/stats\` - Database statistics" >> $GITHUB_STEP_SUMMARY
-          echo "- \`GET /api/system\` - System information" >> $GITHUB_STEP_SUMMARY
-          echo "- \`GET /api/health\` - Enhanced health check with DB status" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📊 Database Features:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Persistent user storage" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Metrics history logging" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ System information tracking" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Real-time WebSocket with DB integration" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Automatic database initialization with sample data" >> $GITHUB_STEP_SUMMARY
+          echo "### ✨ Enhanced Features:" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔄 Init containers for proper startup sequence" >> $GITHUB_STEP_SUMMARY
+          echo "- 💾 Persistent database storage" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Comprehensive health checks (startup, liveness, readiness)" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔧 ConfigMaps and Secrets for better configuration management" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 Improved resource limits and requests" >> $GITHUB_STEP_SUMMARY
