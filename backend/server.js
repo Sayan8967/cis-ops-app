@@ -1,4 +1,4 @@
-// Updated Backend Server with JWT Authentication
+// Updated Backend Server with Enhanced CORS and Authentication
 // backend/server.js
 const express = require('express');
 const cors = require('cors');
@@ -12,23 +12,90 @@ const { googleLogin, verifyJWT, logout, getProfile } = require('./controllers/au
 
 const app = express();
 
-// CORS setup
+// Enhanced CORS setup to fix Cross-Origin issues
 app.use(cors({
-  origin: "*",
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    // Allow all origins in development, or specific patterns in production
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:30300',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:30300',
+      /^http:\/\/.*:30300$/,  // Any host on port 30300
+      /^http:\/\/.*:3000$/,   // Any host on port 3000
+    ];
+    
+    // In production, be more restrictive
+    if (process.env.NODE_ENV === 'production') {
+      // Add your production domains here
+      allowedOrigins.push(
+        'https://yourdomain.com',
+        'https://www.yourdomain.com'
+      );
+    } else {
+      // In development, allow all origins
+      return callback(null, true);
+    }
+    
+    const isAllowed = allowedOrigins.some(pattern => {
+      if (typeof pattern === 'string') {
+        return pattern === origin;
+      } else {
+        return pattern.test(origin);
+      }
+    });
+    
+    callback(null, isAllowed);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Origin',
+    'X-Requested-With', 
+    'Content-Type', 
+    'Accept', 
+    'Authorization',
+    'Cache-Control',
+    'Pragma'
+  ],
+  exposedHeaders: ['X-New-Token'],
+  maxAge: 86400 // 24 hours
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Logging middleware
+// Additional CORS headers middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  res.header('Access-Control-Expose-Headers', 'X-New-Token');
+  
+  if (req.method === 'OPTIONS') {
+    res.status(204).send();
+    return;
+  }
   next();
 });
 
-// Initialize database on startup
-initializeDatabase().catch(console.error);
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Enhanced logging middleware
+app.use((req, res, next) => {
+  const timestamp = new Date().toISOString();
+  const origin = req.headers.origin || 'no-origin';
+  console.log(`${timestamp} - ${req.method} ${req.path} from ${origin}`);
+  next();
+});
+
+// Initialize database on startup with better error handling
+initializeDatabase().catch(error => {
+  console.error('Database initialization failed:', error);
+  process.exit(1);
+});
 
 // Enhanced metrics function with database logging (SERVER-SIDE ONLY)
 function getSystemMetrics() {
@@ -91,17 +158,59 @@ app.get('/health', (req, res) => {
 // AUTHENTICATION ROUTES
 // ======================================
 
-// Google OAuth login
-app.post('/auth/google', googleLogin);
+// Google OAuth login with enhanced error handling
+app.post('/auth/google', async (req, res) => {
+  try {
+    console.log('Processing Google OAuth login request');
+    await googleLogin(req, res);
+  } catch (error) {
+    console.error('Google login route error:', error);
+    res.status(500).json({
+      error: 'Authentication failed',
+      message: 'Internal server error during login',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // Verify JWT token
-app.get('/auth/verify', verifyToken, verifyJWT);
+app.get('/auth/verify', verifyToken, async (req, res) => {
+  try {
+    await verifyJWT(req, res);
+  } catch (error) {
+    console.error('Token verification route error:', error);
+    res.status(500).json({
+      error: 'Verification failed',
+      message: error.message
+    });
+  }
+});
 
 // Logout
-app.post('/auth/logout', verifyToken, logout);
+app.post('/auth/logout', verifyToken, async (req, res) => {
+  try {
+    await logout(req, res);
+  } catch (error) {
+    console.error('Logout route error:', error);
+    res.status(500).json({
+      error: 'Logout failed',
+      message: error.message
+    });
+  }
+});
 
 // Get user profile
-app.get('/auth/profile', verifyToken, getProfile);
+app.get('/auth/profile', verifyToken, async (req, res) => {
+  try {
+    await getProfile(req, res);
+  } catch (error) {
+    console.error('Profile route error:', error);
+    res.status(500).json({
+      error: 'Profile fetch failed',
+      message: error.message
+    });
+  }
+});
 
 // ======================================
 // PROTECTED API ROUTES
@@ -331,11 +440,21 @@ app.get('/api/stats', async (req, res) => {
   }
 });
 
+// Global error handler
+app.use((error, req, res, next) => {
+  console.error('Global error handler:', error);
+  res.status(500).json({
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+  });
+});
+
 // Catch-all for undefined routes
 app.use('*', (req, res) => {
   res.status(404).json({ 
     error: 'Route not found', 
-    path: req.originalUrl
+    path: req.originalUrl,
+    method: req.method
   });
 });
 
@@ -343,8 +462,25 @@ app.use('*', (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, { 
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!origin) return callback(null, true);
+      
+      // Allow all origins in development
+      if (process.env.NODE_ENV !== 'production') {
+        return callback(null, true);
+      }
+      
+      // In production, be more restrictive
+      const allowedOrigins = [
+        'https://yourdomain.com',
+        'https://www.yourdomain.com'
+      ];
+      
+      callback(null, allowedOrigins.includes(origin));
+    },
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -397,18 +533,25 @@ io.on('connection', (socket) => {
     console.log('Client disconnected:', socket.user.email);
     clearInterval(interval);
   });
+  
+  socket.on('error', (error) => {
+    console.error('WebSocket error for', socket.user.email, ':', error);
+  });
 });
 
-// Start server
+// Start server with enhanced error handling
 const PORT = process.env.PORT || 4000;
-const HOST = '0.0.0.0';
-server.listen(PORT, () => {
+const HOST = process.env.HOST || '0.0.0.0';
+
+server.listen(PORT, HOST, () => {
   console.log('=====================================');
   console.log('🚀 CIS Operations Backend v2.0 Started');
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on ${HOST}:${PORT}`);
   console.log(`Health check: http://${HOST}:${PORT}/health`);
   console.log(`Database: PostgreSQL`);
   console.log(`Authentication: JWT + Google OAuth`);
+  console.log(`CORS: Enhanced configuration`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`Protected API endpoints:`);
   console.log(`  POST /auth/google (login)`);
   console.log(`  GET  /auth/verify (verify token)`);
@@ -420,4 +563,21 @@ server.listen(PORT, () => {
   console.log(`  GET  /api/system (protected)`);
   console.log(`  GET  /api/stats (protected)`);
   console.log('=====================================');
+});
+
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
 });
