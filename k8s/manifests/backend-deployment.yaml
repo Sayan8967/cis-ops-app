@@ -29,7 +29,7 @@ spec:
           echo "PostgreSQL is ready!"
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:2ce1afd6e49e8c2b45aa378d9626fa88d9cdadb5
+        image: docker.io/sayan896/cis-ops-backend:6d9fdf0e7de6d8013f1a81768d15ede74f54dac9
         ports:
         - containerPort: 4000
           name: http
