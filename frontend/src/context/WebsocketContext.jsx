@@ -1,18 +1,28 @@
-// frontend/src/context/WebsocketContext.jsx
+// frontend/src/context/WebsocketContext.jsx - Updated with JWT Authentication
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
-import { getBestBackendUrl, testBackendConnection } from '../api/config.js';
+import { getBestBackendUrl } from '../api/config.js';
+import authService from '../services/authService.js';
 
 const WsContext = createContext();
 
 export function WebsocketProvider({ children }) {
   const [metrics, setMetrics] = useState({});
-  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [connectionStatus, setConnectionStatus] = useState('initializing');
   const [socket, setSocket] = useState(null);
+  const [userCount, setUserCount] = useState(0);
 
   const connectWebSocket = async (backendUrl) => {
     try {
-      console.log('Attempting WebSocket connection to:', backendUrl);
+      // Check if user is authenticated
+      if (!authService.isAuthenticated()) {
+        console.log('User not authenticated, skipping WebSocket connection');
+        setConnectionStatus('unauthenticated');
+        return null;
+      }
+
+      const token = authService.getToken();
+      console.log('Attempting authenticated WebSocket connection to:', backendUrl);
       
       // Clean up existing socket
       if (socket) {
@@ -29,16 +39,24 @@ export function WebsocketProvider({ children }) {
         reconnectionDelay: 1000,
         reconnectionDelayMax: 5000,
         maxReconnectionAttempts: 5,
+        auth: {
+          token: token
+        }
       });
 
       newSocket.on('connect', () => {
-        console.log('WebSocket connected successfully to:', backendUrl);
+        console.log('Authenticated WebSocket connected successfully to:', backendUrl);
         setConnectionStatus('connected');
       });
 
       newSocket.on('metrics', (data) => {
-        console.log('Received metrics:', data);
+        console.log('Received metrics from server:', data);
         setMetrics(data);
+      });
+
+      newSocket.on('userCount', (count) => {
+        console.log('Received user count:', count);
+        setUserCount(count);
       });
 
       newSocket.on('disconnect', (reason) => {
@@ -47,8 +65,17 @@ export function WebsocketProvider({ children }) {
       });
 
       newSocket.on('connect_error', (error) => {
-        console.error('WebSocket connection error:', error);
-        setConnectionStatus('error');
+        console.error('WebSocket connection error:', error.message);
+        
+        if (error.message.includes('Authentication failed')) {
+          setConnectionStatus('auth_failed');
+          // Token might be expired, try to refresh
+          authService.verifyToken().catch(() => {
+            console.log('Token verification failed, user needs to re-login');
+          });
+        } else {
+          setConnectionStatus('error');
+        }
       });
 
       newSocket.on('reconnect', (attemptNumber) => {
@@ -76,8 +103,9 @@ export function WebsocketProvider({ children }) {
   };
 
   const tryMultipleConnections = async () => {
+    const { url: primaryUrl } = await getBestBackendUrl();
     const urls = [
-      await getBestBackendUrl(),
+      primaryUrl,
       `http://${window.location.hostname}:30400`,
       `http://${window.location.hostname}:4000`,
       'http://localhost:30400',
@@ -88,13 +116,6 @@ export function WebsocketProvider({ children }) {
       try {
         console.log('Testing WebSocket connection to:', url);
         
-        // First test if the backend is reachable
-        const backendReachable = await testBackendConnection(url);
-        if (!backendReachable) {
-          console.log('Backend not reachable at:', url);
-          continue;
-        }
-
         const socketConnection = await connectWebSocket(url);
         if (socketConnection) {
           return socketConnection;
@@ -110,27 +131,35 @@ export function WebsocketProvider({ children }) {
   };
 
   const startPollingFallback = async () => {
-    console.log('Starting polling fallback for metrics');
+    console.log('Starting authenticated polling fallback for metrics');
     
     const pollMetrics = async () => {
       try {
-        const backendUrl = await getBestBackendUrl();
-        const response = await fetch(`${backendUrl}/api/metrics`);
+        const apiInstance = authService.getAxiosInstance();
+        if (!apiInstance) {
+          console.error('No authenticated API instance available');
+          return;
+        }
+
+        const response = await apiInstance.get('/api/metrics');
         
-        if (response.ok) {
-          const data = await response.json();
-          setMetrics(data);
+        if (response.status === 200) {
+          setMetrics(response.data.current || response.data);
           setConnectionStatus('polling');
         } else {
           console.error('Polling failed with status:', response.status);
         }
       } catch (error) {
         console.error('Polling error:', error);
+        
+        if (error.response?.status === 401) {
+          setConnectionStatus('auth_failed');
+        }
       }
     };
 
-    // Poll every 5 seconds
-    const pollInterval = setInterval(pollMetrics, 5000);
+    // Poll every 10 seconds (less frequent than WebSocket)
+    const pollInterval = setInterval(pollMetrics, 10000);
     
     // Initial poll
     pollMetrics();
@@ -145,11 +174,22 @@ export function WebsocketProvider({ children }) {
     const initialize = async () => {
       if (!mounted) return;
 
+      // Wait a bit for auth to initialize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      if (!authService.isAuthenticated()) {
+        setConnectionStatus('unauthenticated');
+        return;
+      }
+
+      setConnectionStatus('connecting');
+
       // Try WebSocket connections first
       const socketConnection = await tryMultipleConnections();
       
-      if (!socketConnection && mounted) {
+      if (!socketConnection && mounted && authService.isAuthenticated()) {
         // If WebSocket fails, fall back to polling
+        console.log('WebSocket failed, falling back to polling');
         pollInterval = await startPollingFallback();
       }
     };
@@ -169,10 +209,26 @@ export function WebsocketProvider({ children }) {
     };
   }, []);
 
+  // Reconnect function for manual retry
+  const reconnect = async () => {
+    if (!authService.isAuthenticated()) {
+      setConnectionStatus('unauthenticated');
+      return;
+    }
+
+    setConnectionStatus('connecting');
+    await tryMultipleConnections();
+  };
+
   const contextValue = {
     metrics,
+    userCount,
     connectionStatus,
-    reconnect: tryMultipleConnections,
+    reconnect,
+    isConnected: connectionStatus === 'connected',
+    isPolling: connectionStatus === 'polling',
+    isAuthFailed: connectionStatus === 'auth_failed',
+    isUnauthenticated: connectionStatus === 'unauthenticated',
   };
   
   return (
