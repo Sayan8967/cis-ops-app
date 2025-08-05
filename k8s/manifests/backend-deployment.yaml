@@ -15,26 +15,29 @@ spec:
       labels:
         app: cis-ops-backend
     spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:15-alpine
+        command: 
+        - sh
+        - -c
+        - |
+          until pg_isready -h postgres-service -p 5432 -U cisops; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:e06ac1d356ef2756376b4628297969527c535cbc
+        image: docker.io/sayan896/cis-ops-backend:2ce1afd6e49e8c2b45aa378d9626fa88d9cdadb5
         ports:
         - containerPort: 4000
-        env:
-        - name: NODE_ENV
-          value: "production"
-        - name: PORT
-          value: "4000"
-        - name: DB_HOST
-          value: "postgres-service"
-        - name: DB_USER
-          value: "cisops"
-        - name: DB_PASSWORD
-          value: "cisops123"
-        - name: DB_NAME
-          value: "cisops"
-        - name: DB_PORT
-          value: "5432"
+          name: http
+        envFrom:
+        - configMapRef:
+            name: backend-config
+        - secretRef:
+            name: backend-secret
         resources:
           requests:
             memory: "256Mi"
@@ -46,11 +49,23 @@ spec:
           httpGet:
             path: /health
             port: 4000
-          initialDelaySeconds: 45
+          initialDelaySeconds: 60  # Increased for DB initialization
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /health
             port: 4000
           initialDelaySeconds: 30
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:  # Added startup probe for slow initialization
+          httpGet:
+            path: /health
+            port: 4000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30

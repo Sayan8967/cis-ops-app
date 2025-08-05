@@ -7,6 +7,8 @@ metadata:
     app: postgres
 spec:
   replicas: 1
+  strategy:
+    type: Recreate  # Important for databases with persistent storage
   selector:
     matchLabels:
       app: postgres
@@ -37,7 +39,7 @@ spec:
             memory: "256Mi"
             cpu: "200m"
           limits:
-            memory: "512Mi"
+            memory: "1Gi"  # Increased for better performance
             cpu: "500m"
         livenessProbe:
           exec:
@@ -45,16 +47,25 @@ spec:
             - pg_isready
             - -U
             - cisops
+            - -d
+            - cisops
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
         readinessProbe:
           exec:
             command:
             - pg_isready
             - -U
             - cisops
+            - -d
+            - cisops
           initialDelaySeconds: 5
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
       volumes:
       - name: postgres-storage
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: postgres-pvc

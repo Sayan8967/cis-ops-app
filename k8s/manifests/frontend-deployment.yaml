@@ -17,9 +17,10 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: docker.io/sayan896/cis-ops-frontend:e06ac1d356ef2756376b4628297969527c535cbc
+        image: docker.io/sayan896/cis-ops-frontend:2ce1afd6e49e8c2b45aa378d9626fa88d9cdadb5
         ports:
         - containerPort: 80
+          name: http
         env:
         - name: REACT_APP_BACKEND_URL
           value: "http://mydevopsproject.live:30400"
@@ -36,9 +37,21 @@ spec:
             port: 80
           initialDelaySeconds: 30
           periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /health
             port: 80
-          initialDelaySeconds: 15
+          initialDelaySeconds: 10
           periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 6

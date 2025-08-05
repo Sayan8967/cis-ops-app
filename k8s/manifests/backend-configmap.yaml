@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: cis-ops
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+  DB_HOST: "postgres-service"
+  DB_PORT: "5432"
+  DB_NAME: "cisops"
+  DB_USER: "cisops"
