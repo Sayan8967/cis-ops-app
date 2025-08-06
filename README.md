@@ -1,4 +1,4 @@
-# CIS Operations Dashboard & Chat Tool
+# CIS Operations Dashboard & Chat Tools
 
 ## Setup
 Ensure you have a `.env` in `frontend/` with:
