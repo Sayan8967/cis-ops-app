@@ -1,161 +1,14 @@
-// backend/server.js - Dynamic host IP resolution for AWS EC2
+// backend/server.js - Simplified version serving React static files (No JWT)
 const express = require('express');
-const cors = require('cors');
+const path = require('path');
 const { Pool } = require('pg');
-const { promisify } = require('util');
-const { exec } = require('child_process');
+const axios = require('axios');
 const os = require('os');
-const { googleLogin, verifyJWT, logout, getProfile, authenticateToken, healthCheck: authHealthCheck } = require('./controllers/authController');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Function to get the AWS EC2 host IP address dynamically
-const getAWSHostIP = async () => {
-  try {
-    // Method 1: Try AWS EC2 metadata service first (most reliable in AWS)
-    const execPromise = promisify(exec);
-    
-    try {
-      console.log('🌐 Attempting to get AWS EC2 public IP...');
-      const { stdout: publicIP } = await execPromise("curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo ''");
-      if (publicIP && publicIP.trim().match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('✅ Got AWS EC2 public IP:', publicIP.trim());
-        return publicIP.trim();
-      }
-    } catch (error) {
-      console.log('❌ Failed to get AWS EC2 public IP:', error.message);
-    }
-
-    try {
-      console.log('🌐 Attempting to get AWS EC2 private IP...');
-      const { stdout: privateIP } = await execPromise("curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null || echo ''");
-      if (privateIP && privateIP.trim().match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('✅ Got AWS EC2 private IP:', privateIP.trim());
-        return privateIP.trim();
-      }
-    } catch (error) {
-      console.log('❌ Failed to get AWS EC2 private IP:', error.message);
-    }
-
-    // Method 2: Try to get from route command (fallback)
-    try {
-      const { stdout } = await execPromise("ip route show default | awk '/default/ {print $3}'");
-      const hostIP = stdout.trim();
-      if (hostIP && hostIP.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('✅ Got host IP from route command:', hostIP);
-        return hostIP;
-      }
-    } catch (error) {
-      console.log('❌ Failed to get IP from route command:', error.message);
-    }
-
-    // Method 3: Try hostname resolution
-    try {
-      const { stdout } = await execPromise("hostname -I | awk '{print $1}'");
-      const hostIP = stdout.trim();
-      if (hostIP && hostIP.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('✅ Got host IP from hostname -I:', hostIP);
-        return hostIP;
-      }
-    } catch (error) {
-      console.log('❌ Failed to get IP from hostname -I:', error.message);
-    }
-
-    // Method 4: Try to get external IP using curl
-    const externalServices = [
-      'https://api.ipify.org',
-      'https://icanhazip.com',
-      'https://ipinfo.io/ip'
-    ];
-
-    for (const service of externalServices) {
-      try {
-        const { stdout } = await execPromise(`curl -s --connect-timeout 5 ${service}`);
-        const ip = stdout.trim();
-        if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-          console.log(`✅ Got external IP from ${service}:`, ip);
-          return ip;
-        }
-      } catch (error) {
-        console.log(`❌ Failed to get IP from ${service}:`, error.message);
-      }
-    }
-
-    // Method 5: Try network interfaces as last resort
-    const interfaces = os.networkInterfaces();
-    
-    // Look for common AWS interface patterns
-    const priorityInterfaces = ['eth0', 'ens5', 'en0', 'enp0s3'];
-    
-    for (const interfaceName of priorityInterfaces) {
-      if (interfaces[interfaceName]) {
-        for (const iface of interfaces[interfaceName]) {
-          if (iface.family === 'IPv4' && !iface.internal) {
-            console.log(`✅ Got host IP from interface ${interfaceName}:`, iface.address);
-            return iface.address;
-          }
-        }
-      }
-    }
-
-    // Fallback: get any external IPv4 address
-    for (const interfaceName in interfaces) {
-      for (const iface of interfaces[interfaceName]) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          console.log(`✅ Got host IP from interface ${interfaceName}:`, iface.address);
-          return iface.address;
-        }
-      }
-    }
-
-  } catch (error) {
-    console.error('❌ Error getting AWS host IP:', error.message);
-  }
-
-  return null;
-};
-
-// Function to get all possible allowed origins dynamically for AWS
-const getAllowedOrigins = async () => {
-  const origins = [
-    'http://localhost:3000',
-    'http://localhost:30080',
-    'http://mydevopsproject.live:30080',
-    'http://mydevopsproject.live'
-  ];
-
-  // Try to get the actual AWS host IP
-  const awsHostIP = await getAWSHostIP();
-  
-  if (awsHostIP) {
-    origins.push(
-      `http://${awsHostIP}:30080`,
-      `http://${awsHostIP}:3000`,
-      `http://${awsHostIP}`,
-      `https://${awsHostIP}:30080`,
-      `https://${awsHostIP}:3000`,
-      `https://${awsHostIP}`
-    );
-    console.log('✅ Added dynamic AWS host IP origins:', awsHostIP);
-  }
-
-  // Add regex patterns for dynamic IP matching (broader AWS patterns)
-  origins.push(
-    /^https?:\/\/.*\.live$/,
-    /^https?:\/\/.*\.live:\d+$/,
-    /^https?:\/\/localhost:\d+$/,
-    /^https?:\/\/127\.0\.0\.1:\d+$/,
-    /^https?:\/\/\d+\.\d+\.\d+\.\d+:\d+$/, // Any IP:PORT combination
-    /^https?:\/\/\d+\.\d+\.\d+\.\d+$/,      // Any IP without port
-    /^https?:\/\/.*\.amazonaws\.com$/,       // AWS domains
-    /^https?:\/\/.*\.compute-1\.amazonaws\.com$/, // AWS EC2 domains
-  );
-
-  return origins;
-};
-
-// Database connection - SSL disabled for internal Kubernetes communication
+// Database connection (simplified - optional)
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
@@ -163,245 +16,245 @@ const pool = new Pool({
   user: process.env.DB_USER || 'cisops',
   password: process.env.DB_PASSWORD || 'cisops123',
   ssl: false,
-  max: 10,
+  max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
 
-// Test database connection on startup
+// Test database connection (optional)
 const testDatabaseConnection = async () => {
   try {
     const client = await pool.connect();
     await client.query('SELECT NOW()');
     client.release();
     console.log('✅ Database connection successful');
-    
-    // Create tables if they don't exist
-    await initializeDatabase();
-    
     return true;
   } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
+    console.warn('⚠️ Database connection failed, continuing without DB:', error.message);
     return false;
   }
 };
 
-// Initialize database tables
-const initializeDatabase = async () => {
-  try {
-    const client = await pool.connect();
-    
-    // Create users table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        picture TEXT,
-        role VARCHAR(50) DEFAULT 'user',
-        status VARCHAR(50) DEFAULT 'active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        last_login TIMESTAMP
-      )
-    `);
-    
-    console.log('✅ Database tables initialized');
-    client.release();
-  } catch (error) {
-    console.error('❌ Database initialization failed:', error);
-  }
-};
+// Mock user storage (since no database required)
+let currentUser = null;
 
-// Initialize CORS with dynamic origins
-let corsOptions = {
-  origin: [
-    'http://localhost:3000',
-    'http://localhost:30080',
-    /^http:\/\/localhost:\d+$/,
-    /^http:\/\/\d+\.\d+\.\d+\.\d+:\d+$/
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cache-Control'],
-  optionsSuccessStatus: 200
-};
-
-// Update CORS options with dynamic origins
-const initializeCors = async () => {
+// Mock metrics data
+const getSimpleMetrics = () => {
   try {
-    const allowedOrigins = await getAllowedOrigins();
-    corsOptions.origin = allowedOrigins;
-    console.log('✅ CORS origins initialized:', allowedOrigins.length, 'origins');
+    const cpus = os.cpus();
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    
+    return {
+      cpu: Math.floor(Math.random() * 50) + 10,
+      memory: Math.round((usedMem / totalMem) * 100),
+      disk: Math.floor(Math.random() * 30) + 20,
+      network: Math.floor(Math.random() * 100) + 50,
+      uptime: Math.round(os.uptime()),
+      platform: os.platform(),
+      hostname: os.hostname(),
+      timestamp: new Date().toISOString(),
+      totalMemoryGB: Math.round(totalMem / (1024 * 1024 * 1024) * 100) / 100,
+      freeMemoryGB: Math.round(freeMem / (1024 * 1024 * 1024) * 100) / 100,
+      cpuCount: cpus.length,
+      processUptime: Math.round(process.uptime())
+    };
   } catch (error) {
-    console.error('❌ Failed to initialize CORS origins:', error.message);
+    console.error('Error getting metrics:', error);
+    return {
+      cpu: 0,
+      memory: 0,
+      disk: 0,
+      network: 0,
+      uptime: 0,
+      platform: 'unknown',
+      hostname: 'unknown',
+      timestamp: new Date().toISOString(),
+      error: error.message
+    };
   }
 };
 
 // Middleware
-app.use(async (req, res, next) => {
-  // Dynamic CORS handling
-  const origin = req.headers.origin;
-  
-  if (origin) {
-    const allowedOrigins = corsOptions.origin;
-    let isAllowed = false;
-    
-    for (const allowedOrigin of allowedOrigins) {
-      if (typeof allowedOrigin === 'string' && allowedOrigin === origin) {
-        isAllowed = true;
-        break;
-      } else if (allowedOrigin instanceof RegExp && allowedOrigin.test(origin)) {
-        isAllowed = true;
-        break;
-      }
-    }
-    
-    if (isAllowed) {
-      res.header('Access-Control-Allow-Origin', origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Cache-Control');
-    }
-  }
-  
-  next();
-});
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Request logging middleware
+// Request logging
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path} - IP: ${req.ip || req.connection.remoteAddress}`);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
   next();
 });
 
-// Health check endpoint - MUST be first
-app.get('/health', async (req, res) => {
-  try {
-    // Test database connection
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-    
-    // Get host information
-    const awsHostIP = await getAWSHostIP();
-    
-    res.json({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      uptime: Math.floor(process.uptime()),
-      memory: process.memoryUsage(),
-      database: 'connected',
-      version: '1.0.0',
-      environment: process.env.NODE_ENV || 'development',
-      hostIP: awsHostIP,
-      hostname: os.hostname(),
-      platform: os.platform()
-    });
-  } catch (error) {
-    console.error('Health check database error:', error);
-    res.status(503).json({
-      status: 'unhealthy',
-      timestamp: new Date().toISOString(),
-      error: 'Database connection failed',
-      database: 'disconnected'
-    });
-  }
-});
+// Serve React static files from the build directory
+const buildPath = path.join(__dirname, '../frontend/build');
+console.log('Serving React static files from:', buildPath);
+app.use(express.static(buildPath));
 
-// Authentication routes
-app.post('/auth/google', googleLogin);
-app.get('/auth/verify', verifyJWT);
-app.post('/auth/logout', logout);
-app.get('/auth/profile', getProfile);
-app.get('/auth/health', authHealthCheck);
+// ======= API ROUTES =======
 
-// API routes (protected)
-app.get('/api/health', authenticateToken, async (req, res) => {
-  try {
-    const client = await pool.connect();
-    const result = await client.query('SELECT COUNT(*) as user_count FROM users');
-    client.release();
-    
-    const awsHostIP = await getAWSHostIP();
-    
-    res.json({
-      status: 'healthy',
-      authenticated: true,
-      user: req.user,
-      database: 'connected',
-      userCount: parseInt(result.rows[0].user_count),
-      timestamp: new Date().toISOString(),
-      hostIP: awsHostIP,
-      hostname: os.hostname()
-    });
-  } catch (error) {
-    res.status(503).json({
-      status: 'unhealthy',
-      error: 'Database error',
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-app.get('/api/metrics', authenticateToken, async (req, res) => {
-  const awsHostIP = await getAWSHostIP();
-  
-  const metrics = {
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
-    memory: process.memoryUsage(),
-    cpu: process.cpuUsage(),
-    activeConnections: pool.totalCount,
-    idleConnections: pool.idleCount,
-    platform: process.platform,
-    nodeVersion: process.version,
-    hostIP: awsHostIP,
-    hostname: os.hostname()
-  };
-  
-  res.json({
-    success: true,
-    current: metrics,
-    historical: [] // TODO: Implement historical data storage
+    version: '1.0.0',
+    user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
   });
 });
 
-// Users management routes (admin only)
-app.get('/api/users', authenticateToken, async (req, res) => {
+// Google OAuth login - Simplified
+app.post('/api/auth/google', async (req, res) => {
   try {
-    // Check if user has moderator or admin role
-    if (req.user.role !== 'admin' && req.user.role !== 'moderator') {
-      return res.status(403).json({
+    const { token, userInfo } = req.body;
+    
+    if (!token) {
+      return res.status(400).json({
         success: false,
-        message: 'Access denied. Moderator or admin role required.'
+        message: 'Google access token is required'
       });
     }
-
-    const client = await pool.connect();
-    const result = await client.query(`
-      SELECT id, name, email, picture, role, status, created_at, updated_at, last_login 
-      FROM users 
-      ORDER BY created_at DESC
-    `);
-    client.release();
     
-    res.json(result.rows);
+    console.log('Processing Google login...');
+    
+    let googleUserData;
+    
+    // Try to use provided userInfo first, then fetch from Google
+    if (userInfo && userInfo.email) {
+      googleUserData = userInfo;
+      console.log('Using provided user info:', userInfo.email);
+    } else {
+      try {
+        console.log('Fetching user info from Google API...');
+        const response = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          },
+          timeout: 10000
+        });
+        
+        googleUserData = response.data;
+        console.log('Fetched user info from Google:', googleUserData.email);
+        
+      } catch (googleError) {
+        console.error('Failed to fetch user info from Google:', googleError.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Google token or failed to fetch user information'
+        });
+      }
+    }
+    
+    // Validate required Google user data
+    if (!googleUserData.email || !googleUserData.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Incomplete user information from Google'
+      });
+    }
+    
+    // Store user data (simplified - just in memory)
+    currentUser = {
+      id: Date.now(), // Simple ID
+      name: googleUserData.name,
+      email: googleUserData.email,
+      picture: googleUserData.picture,
+      role: 'user',
+      status: 'active',
+      loginTime: new Date().toISOString()
+    };
+    
+    console.log('Login successful for user:', currentUser.email);
+    
+    res.json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        picture: currentUser.picture,
+        role: currentUser.role,
+        status: currentUser.status
+      }
+    });
+    
   } catch (error) {
-    console.error('Error fetching users:', error);
+    console.error('Google login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch users'
+      message: 'Internal server error during authentication'
     });
   }
 });
 
-// System information endpoint
-app.get('/api/system', authenticateToken, async (req, res) => {
-  const awsHostIP = await getAWSHostIP();
+// Check current user
+app.get('/api/auth/user', (req, res) => {
+  if (currentUser) {
+    res.json({
+      success: true,
+      user: {
+        id: currentUser.id,
+        name: currentUser.name,
+        email: currentUser.email,
+        picture: currentUser.picture,
+        role: currentUser.role,
+        status: currentUser.status
+      }
+    });
+  } else {
+    res.status(401).json({
+      success: false,
+      message: 'Not authenticated'
+    });
+  }
+});
+
+// Logout
+app.post('/api/auth/logout', (req, res) => {
+  if (currentUser) {
+    console.log('User logged out:', currentUser.email);
+  }
+  currentUser = null;
   
+  res.json({
+    success: true,
+    message: 'Logout successful'
+  });
+});
+
+// Metrics endpoint
+app.get('/api/metrics', (req, res) => {
+  try {
+    const metrics = getSimpleMetrics();
+    res.json({
+      success: true,
+      current: metrics,
+      user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
+    });
+  } catch (error) {
+    console.error('Error in /api/metrics:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch metrics', 
+      message: error.message 
+    });
+  }
+});
+
+// Users endpoint (simplified)
+app.get('/api/users', (req, res) => {
+  const users = currentUser ? [currentUser] : [];
+  res.json({
+    success: true,
+    users: users,
+    count: users.length
+  });
+});
+
+// System info endpoint
+app.get('/api/system', (req, res) => {
   res.json({
     success: true,
     system: {
@@ -413,30 +266,27 @@ app.get('/api/system', authenticateToken, async (req, res) => {
       loadavg: os.loadavg(),
       totalmem: os.totalmem(),
       freemem: os.freemem(),
-      cpus: os.cpus().length,
-      hostIP: awsHostIP
+      cpus: os.cpus().length
     },
-    database: {
-      totalConnections: pool.totalCount,
-      idleConnections: pool.idleCount,
-      waitingCount: pool.waitingCount
-    },
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
   });
 });
 
-// Network information endpoint (for debugging)
-app.get('/api/network', authenticateToken, async (req, res) => {
-  const awsHostIP = await getAWSHostIP();
-  const interfaces = os.networkInterfaces();
+// Catch-all handler - serve React app for any unmatched routes
+app.get('*', (req, res) => {
+  // Don't serve React app for API routes
+  if (req.path.startsWith('/api/')) {
+    res.status(404).json({ 
+      success: false,
+      error: 'API route not found', 
+      path: req.originalUrl 
+    });
+    return;
+  }
   
-  res.json({
-    success: true,
-    hostIP: awsHostIP,
-    hostname: os.hostname(),
-    networkInterfaces: interfaces,
-    corsOrigins: corsOptions.origin.length
-  });
+  // Serve React app for all other routes (client-side routing)
+  res.sendFile(path.join(buildPath, 'index.html'));
 });
 
 // Error handling middleware
@@ -449,89 +299,46 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
-  console.log(`404: ${req.method} ${req.originalUrl} not found`);
-  res.status(404).json({
-    success: false,
-    message: `Route ${req.method} ${req.originalUrl} not found`,
-    availableRoutes: [
-      'GET /health',
-      'POST /auth/google',
-      'GET /auth/verify',
-      'POST /auth/logout',
-      'GET /auth/profile',
-      'GET /api/health',
-      'GET /api/metrics',
-      'GET /api/users',
-      'GET /api/system',
-      'GET /api/network'
-    ]
-  });
-});
-
 // Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
-  await pool.end();
+  if (pool) await pool.end();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   console.log('SIGINT received, shutting down gracefully');
-  await pool.end();
+  if (pool) await pool.end();
   process.exit(0);
 });
 
 // Start server
 const startServer = async () => {
   try {
-    console.log('🚀 Starting CIS-Ops Backend Server...');
+    console.log('🚀 Starting Simplified CIS-Ops Backend...');
     console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Port:', PORT);
     
-    // Initialize CORS with dynamic origins
-    await initializeCors();
-    
-    // Get and display AWS host IP
-    const awsHostIP = await getAWSHostIP();
-    if (awsHostIP) {
-      console.log('🌐 Detected AWS host IP:', awsHostIP);
-    } else {
-      console.log('⚠️ Could not detect AWS host IP, using fallback patterns');
-    }
-    
-    // Test database connection
-    const dbConnected = await testDatabaseConnection();
-    if (!dbConnected) {
-      console.warn('⚠️ Starting server without database connection');
-    }
+    // Test database connection (optional)
+    await testDatabaseConnection();
     
     app.listen(PORT, '0.0.0.0', () => {
+      console.log('=====================================');
+      console.log('🚀 CIS Operations Server Started');
       console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
-      console.log('📊 Health check: GET /health');
-      console.log('🔐 Auth endpoints: POST /auth/google, GET /auth/verify');
-      console.log('📈 API endpoints: GET /api/health, GET /api/metrics');
-      console.log('👥 User management: GET /api/users (admin/moderator)');
-      console.log('🌐 Network info: GET /api/network');
-      
-      // Log database status
-      if (dbConnected) {
-        console.log('💾 Database: Connected to PostgreSQL');
-      } else {
-        console.log('💾 Database: Not connected (some features disabled)');
-      }
-      
-      // Log AWS networking information
-      if (awsHostIP) {
-        console.log(`🔗 Frontend should connect to: http://${awsHostIP}:${PORT}`);
-        console.log(`🔗 NodePort service accessible at: http://${awsHostIP}:30400`);
-        console.log(`🔗 Public access (if configured): http://${awsHostIP}:30080`);
-      }
-      
-      console.log(`📡 CORS configured for ${corsOptions.origin.length} origin patterns`);
+      console.log('📊 Health check: GET /api/health');
+      console.log('🔐 Auth endpoints:');
+      console.log('  POST /api/auth/google');
+      console.log('  GET  /api/auth/user');
+      console.log('  POST /api/auth/logout');
+      console.log('📈 API endpoints:');
+      console.log('  GET  /api/metrics');
+      console.log('  GET  /api/users');
+      console.log('  GET  /api/system');
+      console.log('🌐 React App: All other routes serve React static files');
       console.log(`🏠 Hostname: ${os.hostname()}`);
       console.log(`🌍 Platform: ${os.platform()}`);
+      console.log('=====================================');
     });
     
   } catch (error) {

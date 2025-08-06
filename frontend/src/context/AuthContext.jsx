@@ -1,6 +1,6 @@
-// frontend/src/context/AuthContext.jsx 
+// frontend/src/context/AuthContext.jsx - Simplified Auth Context
 import React, { createContext, useState, useContext, useEffect } from 'react';
-import { useGoogleLogin } from '@react-oauth/google';
+import { useAuth } from '../api/auth.js';
 import authService from '../services/authService.js';
 
 const AuthContext = createContext();
@@ -9,99 +9,41 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  // Google OAuth login hook with fixed flow
-  const googleLogin = useGoogleLogin({
-    onSuccess: async (tokenResponse) => {
-      setLoading(true);
-      setError(null);
-      
-      try {
-        console.log('Google OAuth success, token received');
-        
-        // Use the Google access token directly for backend authentication
-        const result = await authService.loginWithGoogle(tokenResponse.access_token);
-        
-        if (result.success) {
-          setUser(result.user);
-          console.log('Login successful for user:', result.user.email);
-          
-          // Small delay to show success state, then redirect
-          setTimeout(() => {
-            window.location.href = '/dashboard';
-          }, 1000);
-        } else {
-          throw new Error('Backend authentication failed');
-        }
-        
-      } catch (error) {
-        console.error('Login failed:', error);
-        
-        // Better error handling
-        let errorMessage = 'Login failed. Please try again.';
-        
-        if (error.message.includes('timeout')) {
-          errorMessage = 'Connection timeout. Please check your network and try again.';
-        } else if (error.message.includes('Network Error')) {
-          errorMessage = 'Cannot connect to server. Please check if the backend is running.';
-        } else if (error.response?.status === 400) {
-          errorMessage = 'Invalid Google token. Please try logging in again.';
-        } else if (error.response?.status === 500) {
-          errorMessage = 'Server error. Please try again later.';
-        }
-        
-        setError(errorMessage);
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    },
-    onError: (error) => {
-      console.error('Google OAuth failed:', error);
-      setError('Google login failed. Please check your popup blocker and try again.');
-      setLoading(false);
-    },
-    // Fixed OAuth configuration
-    flow: 'implicit',
-    scope: 'openid profile email',
-  });
+  
+  const { login: googleLogin, logout: googleLogout } = useAuth();
 
   // Initialize authentication state on app load
   useEffect(() => {
     const initializeAuth = async () => {
-      console.log('Initializing authentication...');
-      setLoading(true);
-      setError(null);
-      
       try {
-        // Wait for auth service to initialize
-        await authService.waitForInitialization();
+        setLoading(true);
+        setError(null);
         
-        // Check if user has a valid token
-        if (authService.isAuthenticated()) {
-          console.log('Found existing token, verifying...');
-          const verification = await authService.verifyToken();
+        // Check local storage first
+        const storedUser = localStorage.getItem('user');
+        if (storedUser) {
+          const userData = JSON.parse(storedUser);
+          setUser(userData);
+          console.log('Restored user from localStorage:', userData.email);
           
-          if (verification.valid) {
-            setUser(verification.user);
-            console.log('Token verified, user restored:', verification.user.email);
-          } else {
-            console.log('Token invalid, clearing storage');
-            await authService.logout();
-            setUser(null);
+          // Optionally verify with backend
+          try {
+            const currentUser = await authService.getCurrentUser();
+            if (currentUser) {
+              setUser(currentUser);
+            }
+          } catch (backendError) {
+            console.warn('Backend verification failed, but keeping local user:', backendError);
+            // Keep the user from localStorage even if backend fails
           }
         } else {
-          console.log('No existing authentication');
+          console.log('No stored user found');
           setUser(null);
         }
         
       } catch (error) {
         console.error('Auth initialization failed:', error);
-        
-        // Only set error for critical failures, not network issues
-        if (!error.message.includes('timeout') && !error.message.includes('Network Error')) {
-          setError('Authentication system unavailable');
-        }
+        setError('Authentication system error');
         setUser(null);
       } finally {
         setLoading(false);
@@ -114,8 +56,17 @@ export function AuthProvider({ children }) {
   // Login function
   const login = async () => {
     setError(null);
-    console.log('Starting Google login...');
-    googleLogin();
+    setLoading(true);
+    
+    try {
+      console.log('Starting Google login...');
+      googleLogin();
+      // Note: googleLogin handles the rest asynchronously
+    } catch (error) {
+      console.error('Login failed:', error);
+      setError(error.message || 'Login failed');
+      setLoading(false);
+    }
   };
 
   // Logout function
@@ -124,39 +75,27 @@ export function AuthProvider({ children }) {
     setError(null);
     
     try {
-      await authService.logout();
+      await googleLogout();
       setUser(null);
       console.log('Logout successful');
-      
-      // Redirect to login page
-      window.location.href = '/login';
-      
     } catch (error) {
       console.error('Logout failed:', error);
-      // Don't block logout on error, just clear local state
+      // Clear user anyway
       setUser(null);
-      window.location.href = '/login';
+      localStorage.removeItem('user');
     } finally {
       setLoading(false);
     }
   };
 
-  // Check if user has required role
-  const hasRole = (requiredRole) => {
-    return authService.hasRole(requiredRole);
-  };
-
-  // Get authenticated API instance
-  const getApiInstance = () => {
-    return authService.getAxiosInstance();
-  };
-
   // Refresh user profile
   const refreshProfile = async () => {
     try {
-      const updatedUser = await authService.getProfile();
-      setUser(updatedUser);
-      return updatedUser;
+      const updatedUser = await authService.getCurrentUser();
+      if (updatedUser) {
+        setUser(updatedUser);
+        return updatedUser;
+      }
     } catch (error) {
       console.error('Profile refresh failed:', error);
       throw error;
@@ -169,10 +108,8 @@ export function AuthProvider({ children }) {
     error,
     login,
     logout,
-    hasRole,
-    getApiInstance,
     refreshProfile,
-    isAuthenticated: authService.isAuthenticated(),
+    isAuthenticated: !!(user && user.email),
     clearError: () => setError(null),
   };
 
