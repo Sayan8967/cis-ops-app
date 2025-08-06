@@ -1,5 +1,5 @@
-# Frontend Dockerfile (frontend/Dockerfile)
-# Multi-stage build for optimized production image with runtime environment support
+# Frontend Dockerfile (frontend/Dockerfile) - FIXED VERSION
+# Multi-stage build for optimized production image
 
 # Build stage
 FROM node:18-alpine AS builder
@@ -25,8 +25,11 @@ ENV REACT_APP_HF_API_KEY=${REACT_APP_HF_API_KEY}
 ENV REACT_APP_GOOGLE_CLIENT_ID=${REACT_APP_GOOGLE_CLIENT_ID}
 ENV REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL}
 
-# Build the application
+# Build the application - ENSURE this runs successfully
 RUN npm run build
+
+# Verify build output exists
+RUN ls -la /app/build && ls -la /app/build/index.html
 
 # Production stage
 FROM nginx:alpine
@@ -66,8 +69,11 @@ RUN chmod +x /docker-entrypoint.d/30-environment-runtime.sh
 # Copy enhanced nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built application from builder stage
+# Copy built application from builder stage - CRITICAL FIX
 COPY --from=builder /app/build /usr/share/nginx/html
+
+# Verify the copy worked
+RUN ls -la /usr/share/nginx/html && ls -la /usr/share/nginx/html/index.html
 
 # Update index.html to include runtime environment script
 RUN sed -i 's|<head>|<head>\n  <script src="/runtime-env.js"></script>|' /usr/share/nginx/html/index.html
