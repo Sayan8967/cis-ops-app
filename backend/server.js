@@ -1,4 +1,4 @@
-// backend/server.js - Basic backend server with health check and auth routes
+// backend/server.js - Fixed SSL configuration for PostgreSQL
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -7,14 +7,15 @@ const { googleLogin, verifyJWT, logout, getProfile, authenticateToken, healthChe
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Database connection
+// Database connection - FIXED SSL CONFIGURATION
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
   database: process.env.DB_NAME || 'cisops',
   user: process.env.DB_USER || 'cisops',
   password: process.env.DB_PASSWORD || 'cisops123',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  // FIXED: Disable SSL for internal Kubernetes communication
+  ssl: false,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

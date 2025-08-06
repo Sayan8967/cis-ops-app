@@ -1,17 +1,18 @@
-// backend/controllers/authController.js - Complete Authentication Controller
+// backend/controllers/authController.js - Fixed SSL Configuration
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 
-// Database connection
+// Database connection - FIXED SSL CONFIGURATION
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
   database: process.env.DB_NAME || 'cisops',
   user: process.env.DB_USER || 'cisops',
   password: process.env.DB_PASSWORD || 'cisops123',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  // FIXED: Disable SSL for internal Kubernetes communication
+  ssl: false,
   max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
