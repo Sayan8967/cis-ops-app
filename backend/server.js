@@ -86,18 +86,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve React static files from the build directory
-// Use environment variable for build path if set, else default to Docker production path
-const buildPath = process.env.REACT_BUILD_PATH || path.join(__dirname, 'frontend/build');
-const indexHtmlPath = path.join(buildPath, 'index.html');
-const fs = require('fs');
-
-if (fs.existsSync(indexHtmlPath)) {
-  console.log('✅ Serving React static files from:', buildPath);
-  app.use(express.static(buildPath));
-} else {
-  console.warn('⚠️ React build output not found at:', indexHtmlPath);
-}
+// Do not serve React static files in backend. Only serve API endpoints.
 
 // ======= API ROUTES =======
 
@@ -281,24 +270,7 @@ app.get('/api/system', (req, res) => {
   });
 });
 
-// Catch-all handler - serve React app for any unmatched routes
-app.get('*', (req, res) => {
-  // Don't serve React app for API routes
-  if (req.path.startsWith('/api/')) {
-    res.status(404).json({ 
-      success: false,
-      error: 'API route not found', 
-      path: req.originalUrl 
-    });
-    return;
-  }
-  // Serve React app for all other routes (client-side routing)
-  if (fs.existsSync(indexHtmlPath)) {
-    res.sendFile(indexHtmlPath);
-  } else {
-    res.status(500).send('React build output not found. Please run "npm run build" in frontend and rebuild the backend image.');
-  }
-});
+// Only handle API routes. Remove catch-all for static files.
 
 // Error handling middleware
 app.use((err, req, res, next) => {
