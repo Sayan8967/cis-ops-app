@@ -376,7 +376,7 @@ jobs:
                       cpu: "1000m"
                   livenessProbe:
                     httpGet:
-                      path: /health
+                      path: /api/health
                       port: 4000
                     initialDelaySeconds: 60  # Increased for DB initialization
                     periodSeconds: 10
@@ -384,7 +384,7 @@ jobs:
                     failureThreshold: 3
                   readinessProbe:
                     httpGet:
-                      path: /health
+                      path: /api/health
                       port: 4000
                     initialDelaySeconds: 30
                     periodSeconds: 5
@@ -392,7 +392,7 @@ jobs:
                     failureThreshold: 3
                   startupProbe:  # Added startup probe for slow initialization
                     httpGet:
-                      path: /health
+                      path: /api/health
                       port: 4000
                     initialDelaySeconds: 10
                     periodSeconds: 10
