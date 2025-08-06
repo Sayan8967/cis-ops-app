@@ -1,5 +1,5 @@
-// frontend/src/api/config.js - Updated to support runtime environment variables
-// Enhanced API configuration with runtime environment support
+// frontend/src/api/config.js - Fixed API configuration with better error handling
+// Enhanced API configuration with runtime environment support and better fallback handling
 
 const getRuntimeConfig = () => {
   // Check if runtime config is available (injected by Docker container)
@@ -30,12 +30,20 @@ const getBackendUrl = () => {
     return buildTimeBackendUrl;
   }
   
-  // Dynamic detection
+  // Dynamic detection with better URL handling
   if (process.env.NODE_ENV === 'production') {
     const hostname = window.location.hostname;
-    const dynamicUrl = `http://${hostname}:30400`;
-    console.log('Using dynamic backend URL:', dynamicUrl);
-    return dynamicUrl;
+    
+    // Handle different hostname patterns
+    if (hostname.includes('mydevopsproject.live')) {
+      const dynamicUrl = `http://mydevopsproject.live:30400`;
+      console.log('Using production backend URL:', dynamicUrl);
+      return dynamicUrl;
+    } else {
+      const dynamicUrl = `http://${hostname}:30400`;
+      console.log('Using dynamic backend URL:', dynamicUrl);
+      return dynamicUrl;
+    }
   }
   
   // Development fallback
@@ -44,11 +52,11 @@ const getBackendUrl = () => {
   return devUrl;
 };
 
-// Test backend connectivity with enhanced error handling
+// Test backend connectivity with enhanced error handling and shorter timeout
 const testBackendConnection = async (url) => {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), 3000); // Reduced to 3 seconds
     
     console.log(`Testing backend connection to: ${url}`);
     
@@ -57,20 +65,28 @@ const testBackendConnection = async (url) => {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        'Cache-Control': 'no-cache',
       },
-      // Add credentials if needed for CORS
+      // Remove credentials to avoid CORS issues
       credentials: 'omit',
+      // Add mode to handle CORS better
+      mode: 'cors',
     });
     
     clearTimeout(timeoutId);
     
     if (response.ok) {
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch {
+        data = { status: 'ok', text: await response.text() };
+      }
+      
       console.log('✅ Backend connection successful:', {
         url,
         status: response.status,
-        health: data.status,
-        uptime: data.uptime
+        data: data
       });
       return { success: true, data, status: response.status };
     } else {
@@ -92,7 +108,7 @@ const testBackendConnection = async (url) => {
   }
 };
 
-// Get the best available backend URL with comprehensive fallback
+// Get the best available backend URL with faster fallback
 const getBestBackendUrl = async () => {
   const primaryUrl = getBackendUrl();
   
@@ -106,24 +122,39 @@ const getBestBackendUrl = async () => {
   
   // Generate fallback URLs based on current environment
   const hostname = window.location.hostname;
-  const fallbackUrls = [
-    // Try different ports on current hostname
-    `http://${hostname}:30400`,
-    `http://${hostname}:4000`,
-    // Try localhost variants
-    'http://localhost:30400',
-    'http://localhost:4000',
-    // Try common development URLs
-    'http://127.0.0.1:30400',
-    'http://127.0.0.1:4000',
-  ].filter(url => url !== primaryUrl); // Remove duplicates
+  const fallbackUrls = [];
   
-  for (const url of fallbackUrls) {
+  // Add production-specific fallbacks
+  if (hostname.includes('mydevopsproject.live')) {
+    fallbackUrls.push(
+      'http://mydevopsproject.live:30400',
+      'http://mydevopsproject.live:4000'
+    );
+  } else {
+    // Add development and general fallbacks
+    fallbackUrls.push(
+      `http://${hostname}:30400`,
+      `http://${hostname}:4000`,
+      'http://localhost:30400',
+      'http://localhost:4000',
+      'http://127.0.0.1:30400',
+      'http://127.0.0.1:4000'
+    );
+  }
+  
+  // Remove duplicates
+  const uniqueUrls = [...new Set(fallbackUrls.filter(url => url !== primaryUrl))];
+  
+  // Test fallback URLs with reduced parallelism to avoid overwhelming
+  for (const url of uniqueUrls) {
     const result = await testBackendConnection(url);
     if (result.success) {
       console.log('✅ Using fallback URL:', url);
       return { url, result };
     }
+    
+    // Small delay between attempts to avoid overwhelming
+    await new Promise(resolve => setTimeout(resolve, 100));
   }
   
   console.error('❌ All backend connection attempts failed');
@@ -132,7 +163,7 @@ const getBestBackendUrl = async () => {
     result: { 
       success: false, 
       error: 'All connection attempts failed',
-      allAttempts: [primaryUrl, ...fallbackUrls]
+      allAttempts: [primaryUrl, ...uniqueUrls]
     } 
   };
 };
@@ -142,29 +173,50 @@ let API_BASE_URL = getBackendUrl();
 let CONNECTION_STATUS = 'initializing';
 let CONNECTION_RESULT = null;
 
-// Attempt to find the best URL on module load
-getBestBackendUrl().then(({ url, result }) => {
-  API_BASE_URL = url;
-  CONNECTION_STATUS = result.success ? 'connected' : 'failed';
-  CONNECTION_RESULT = result;
-  
-  console.log('🌐 API Configuration Initialized:', {
-    baseUrl: API_BASE_URL,
-    status: CONNECTION_STATUS,
-    result: CONNECTION_RESULT
-  });
-  
-  // Dispatch custom event for components to listen to
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('apiConfigReady', {
-      detail: { baseUrl: API_BASE_URL, status: CONNECTION_STATUS, result: CONNECTION_RESULT }
-    }));
+// Attempt to find the best URL on module load with timeout
+const initializeApiConfig = async () => {
+  try {
+    // Add a maximum initialization time
+    const initializationPromise = getBestBackendUrl();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('API initialization timeout')), 10000)
+    );
+    
+    const { url, result } = await Promise.race([initializationPromise, timeoutPromise]);
+    
+    API_BASE_URL = url;
+    CONNECTION_STATUS = result.success ? 'connected' : 'failed';
+    CONNECTION_RESULT = result;
+    
+    console.log('🌐 API Configuration Initialized:', {
+      baseUrl: API_BASE_URL,
+      status: CONNECTION_STATUS,
+      result: CONNECTION_RESULT
+    });
+    
+    // Dispatch custom event for components to listen to
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('apiConfigReady', {
+        detail: { baseUrl: API_BASE_URL, status: CONNECTION_STATUS, result: CONNECTION_RESULT }
+      }));
+    }
+    
+  } catch (error) {
+    console.error('❌ Failed to initialize API configuration:', error);
+    CONNECTION_STATUS = 'error';
+    CONNECTION_RESULT = { success: false, error: error.message };
+    
+    // Still dispatch event so components can handle the error
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('apiConfigReady', {
+        detail: { baseUrl: API_BASE_URL, status: CONNECTION_STATUS, result: CONNECTION_RESULT }
+      }));
+    }
   }
-}).catch(error => {
-  console.error('❌ Failed to initialize API configuration:', error);
-  CONNECTION_STATUS = 'error';
-  CONNECTION_RESULT = { success: false, error: error.message };
-});
+};
+
+// Start initialization
+initializeApiConfig();
 
 // Export commonly used endpoints
 const getApiEndpoints = () => ({
@@ -172,6 +224,10 @@ const getApiEndpoints = () => ({
   API_HEALTH: `${API_BASE_URL}/api/health`,
   METRICS: `${API_BASE_URL}/api/metrics`,
   USERS: `${API_BASE_URL}/api/users`,
+  AUTH_GOOGLE: `${API_BASE_URL}/auth/google`,
+  AUTH_VERIFY: `${API_BASE_URL}/auth/verify`,
+  AUTH_LOGOUT: `${API_BASE_URL}/auth/logout`,
+  AUTH_PROFILE: `${API_BASE_URL}/auth/profile`,
 });
 
 // Helper function to create full endpoint URLs
@@ -200,6 +256,28 @@ const getConnectionStatus = () => ({
   endpoints: getApiEndpoints()
 });
 
+// Wait for initialization to complete
+const waitForInitialization = (timeout = 10000) => {
+  return new Promise((resolve, reject) => {
+    if (CONNECTION_STATUS !== 'initializing') {
+      resolve(getConnectionStatus());
+      return;
+    }
+    
+    const timeoutId = setTimeout(() => {
+      reject(new Error('API configuration timeout'));
+    }, timeout);
+    
+    const handleReady = (event) => {
+      clearTimeout(timeoutId);
+      window.removeEventListener('apiConfigReady', handleReady);
+      resolve(event.detail);
+    };
+    
+    window.addEventListener('apiConfigReady', handleReady);
+  });
+};
+
 // Export all functions and current state
 export { 
   API_BASE_URL, 
@@ -209,7 +287,8 @@ export {
   testBackendConnection,
   getBestBackendUrl,
   getConnectionStatus,
-  getRuntimeConfig
+  getRuntimeConfig,
+  waitForInitialization
 };
 
 export default {
@@ -221,4 +300,5 @@ export default {
   getBestBackendUrl,
   getConnectionStatus,
   getRuntimeConfig,
+  waitForInitialization,
 };
