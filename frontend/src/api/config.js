@@ -1,5 +1,5 @@
-// frontend/src/api/config.js - Fixed API configuration with better error handling
-// Enhanced API configuration with runtime environment support and better fallback handling
+// frontend/src/api/config.js - Dynamic host IP resolution for Kubernetes Kind
+// Enhanced API configuration with automatic host IP detection
 
 const getRuntimeConfig = () => {
   // Check if runtime config is available (injected by Docker container)
@@ -7,6 +7,74 @@ const getRuntimeConfig = () => {
     return window.RUNTIME_CONFIG;
   }
   return {};
+};
+
+// Get the Kind cluster host IP dynamically
+const getKindHostIP = async () => {
+  try {
+    // Method 1: Try to get host IP from a public IP service
+    const response = await fetch('https://api.ipify.org?format=json', {
+      method: 'GET',
+      timeout: 3000
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('Got external IP from ipify:', data.ip);
+      return data.ip;
+    }
+  } catch (error) {
+    console.log('Failed to get external IP from ipify:', error.message);
+  }
+
+  try {
+    // Method 2: Try alternative IP service
+    const response = await fetch('https://httpbin.org/ip', {
+      method: 'GET',
+      timeout: 3000
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log('Got external IP from httpbin:', data.origin);
+      return data.origin.split(',')[0].trim(); // Handle multiple IPs
+    }
+  } catch (error) {
+    console.log('Failed to get external IP from httpbin:', error.message);
+  }
+
+  // Method 3: Try to detect from current hostname/location
+  const hostname = window.location.hostname;
+  if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+    console.log('Using current IP from hostname:', hostname);
+    return hostname;
+  }
+
+  // Method 4: Try common Kind cluster patterns
+  const kindPatterns = [
+    '172.18.0.1',  // Common Kind host IP
+    '172.17.0.1',  // Docker default bridge
+    '192.168.1.1', // Common router IP
+    '10.0.2.2'     // VirtualBox host IP
+  ];
+
+  for (const ip of kindPatterns) {
+    try {
+      // Test if this IP responds on port 30400
+      const testResponse = await fetch(`http://${ip}:30400/health`, {
+        method: 'GET',
+        timeout: 2000,
+        mode: 'no-cors' // Bypass CORS for testing
+      });
+      console.log(`Kind pattern IP ${ip} is reachable`);
+      return ip;
+    } catch (error) {
+      console.log(`Kind pattern IP ${ip} not reachable:`, error.message);
+    }
+  }
+
+  // Fallback: return null to use hostname-based detection
+  return null;
 };
 
 const getBackendUrl = () => {
@@ -34,14 +102,20 @@ const getBackendUrl = () => {
   if (process.env.NODE_ENV === 'production') {
     const hostname = window.location.hostname;
     
-    // Handle different hostname patterns
+    // Check if we're accessing via a domain name
     if (hostname.includes('mydevopsproject.live')) {
-      const dynamicUrl = `http://mydevopsproject.live:30400`;
-      console.log('Using production backend URL:', dynamicUrl);
+      // For production domain, we'll resolve the IP later
+      const dynamicUrl = `http://${hostname}:30400`;
+      console.log('Using domain-based backend URL (will resolve IP):', dynamicUrl);
+      return dynamicUrl;
+    } else if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+      // If accessing via IP directly
+      const dynamicUrl = `http://${hostname}:30400`;
+      console.log('Using IP-based backend URL:', dynamicUrl);
       return dynamicUrl;
     } else {
       const dynamicUrl = `http://${hostname}:30400`;
-      console.log('Using dynamic backend URL:', dynamicUrl);
+      console.log('Using hostname-based backend URL:', dynamicUrl);
       return dynamicUrl;
     }
   }
@@ -56,7 +130,7 @@ const getBackendUrl = () => {
 const testBackendConnection = async (url) => {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000); // Reduced to 3 seconds
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     
     console.log(`Testing backend connection to: ${url}`);
     
@@ -67,9 +141,7 @@ const testBackendConnection = async (url) => {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-cache',
       },
-      // Remove credentials to avoid CORS issues
       credentials: 'omit',
-      // Add mode to handle CORS better
       mode: 'cors',
     });
     
@@ -108,7 +180,7 @@ const testBackendConnection = async (url) => {
   }
 };
 
-// Get the best available backend URL with faster fallback
+// Get the best available backend URL with dynamic IP resolution
 const getBestBackendUrl = async () => {
   const primaryUrl = getBackendUrl();
   
@@ -118,17 +190,43 @@ const getBestBackendUrl = async () => {
     return { url: primaryUrl, result: primaryResult };
   }
   
-  console.log('Primary URL failed, trying fallbacks...');
+  console.log('Primary URL failed, trying fallbacks with dynamic IP resolution...');
   
   // Generate fallback URLs based on current environment
   const hostname = window.location.hostname;
   const fallbackUrls = [];
   
-  // Add production-specific fallbacks
-  if (hostname.includes('mydevopsproject.live')) {
+  // Try to get the actual host IP for Kind cluster
+  let hostIP = null;
+  try {
+    hostIP = await getKindHostIP();
+  } catch (error) {
+    console.log('Failed to get Kind host IP:', error.message);
+  }
+  
+  // Add IP-based fallbacks if we got a host IP
+  if (hostIP && hostIP !== hostname) {
     fallbackUrls.push(
-      'http://mydevopsproject.live:30400',
-      'http://mydevopsproject.live:4000'
+      `http://${hostIP}:30400`,
+      `http://${hostIP}:4000`
+    );
+  }
+  
+  // Add other fallback patterns
+  if (hostname.includes('mydevopsproject.live') || hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+    // Try common Kind cluster IPs
+    const kindIPs = ['172.18.0.1', '172.17.0.1', '192.168.1.1', '10.0.2.2'];
+    for (const ip of kindIPs) {
+      fallbackUrls.push(
+        `http://${ip}:30400`,
+        `http://${ip}:4000`
+      );
+    }
+    
+    // Add current hostname fallbacks
+    fallbackUrls.push(
+      `http://${hostname}:30400`,
+      `http://${hostname}:4000`
     );
   } else {
     // Add development and general fallbacks
@@ -145,7 +243,7 @@ const getBestBackendUrl = async () => {
   // Remove duplicates
   const uniqueUrls = [...new Set(fallbackUrls.filter(url => url !== primaryUrl))];
   
-  // Test fallback URLs with reduced parallelism to avoid overwhelming
+  // Test fallback URLs
   for (const url of uniqueUrls) {
     const result = await testBackendConnection(url);
     if (result.success) {
@@ -153,8 +251,8 @@ const getBestBackendUrl = async () => {
       return { url, result };
     }
     
-    // Small delay between attempts to avoid overwhelming
-    await new Promise(resolve => setTimeout(resolve, 100));
+    // Small delay between attempts
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
   
   console.error('❌ All backend connection attempts failed');
@@ -179,7 +277,7 @@ const initializeApiConfig = async () => {
     // Add a maximum initialization time
     const initializationPromise = getBestBackendUrl();
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('API initialization timeout')), 10000)
+      setTimeout(() => reject(new Error('API initialization timeout')), 15000)
     );
     
     const { url, result } = await Promise.race([initializationPromise, timeoutPromise]);
@@ -257,7 +355,7 @@ const getConnectionStatus = () => ({
 });
 
 // Wait for initialization to complete
-const waitForInitialization = (timeout = 10000) => {
+const waitForInitialization = (timeout = 15000) => {
   return new Promise((resolve, reject) => {
     if (CONNECTION_STATUS !== 'initializing') {
       resolve(getConnectionStatus());
@@ -288,7 +386,8 @@ export {
   getBestBackendUrl,
   getConnectionStatus,
   getRuntimeConfig,
-  waitForInitialization
+  waitForInitialization,
+  getKindHostIP
 };
 
 export default {
@@ -301,4 +400,5 @@ export default {
   getConnectionStatus,
   getRuntimeConfig,
   waitForInitialization,
+  getKindHostIP
 };
