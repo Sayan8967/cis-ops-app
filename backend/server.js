@@ -1,4 +1,4 @@
-host// backend/server.js - Dynamic host IP resolution for Kubernetes Kind
+host// backend/server.js - Dynamic host IP resolution for AWS EC2
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -425,7 +425,7 @@ app.get('/api/system', authenticateToken, async (req, res) => {
   });
 });
 
-//Network information endpoint (for debugging)
+// Network information endpoint (for debugging)
 app.get('/api/network', authenticateToken, async (req, res) => {
   const awsHostIP = await getAWSHostIP();
   const interfaces = os.networkInterfaces();
