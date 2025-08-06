@@ -1,4 +1,4 @@
-host// backend/server.js - Dynamic host IP resolution for AWS EC2
+// backend/server.js - Dynamic host IP resolution for AWS EC2
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
