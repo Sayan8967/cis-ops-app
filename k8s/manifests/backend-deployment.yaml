@@ -29,7 +29,7 @@ spec:
           echo "PostgreSQL is ready!"
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:643def2ddc9620120c5e2821ec93f601ead652ba
+        image: docker.io/sayan896/cis-ops-backend:930eeed81ce225f208900c53179d31a32a08374c
         ports:
         - containerPort: 4000
           name: http
@@ -47,7 +47,7 @@ spec:
             cpu: "1000m"
         livenessProbe:
           httpGet:
-            path: /health
+            path: /api/health
             port: 4000
           initialDelaySeconds: 60  # Increased for DB initialization
           periodSeconds: 10
@@ -55,7 +55,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /health
+            path: /api/health
             port: 4000
           initialDelaySeconds: 30
           periodSeconds: 5
@@ -63,7 +63,7 @@ spec:
           failureThreshold: 3
         startupProbe:  # Added startup probe for slow initialization
           httpGet:
-            path: /health
+            path: /api/health
             port: 4000
           initialDelaySeconds: 10
           periodSeconds: 10
