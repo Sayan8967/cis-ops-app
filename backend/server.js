@@ -87,9 +87,17 @@ app.use((req, res, next) => {
 });
 
 // Serve React static files from the build directory
-const buildPath = path.join(__dirname, '../frontend/build');
-console.log('Serving React static files from:', buildPath);
-app.use(express.static(buildPath));
+// Use environment variable for build path if set, else default to Docker production path
+const buildPath = process.env.REACT_BUILD_PATH || path.join(__dirname, 'frontend/build');
+const indexHtmlPath = path.join(buildPath, 'index.html');
+const fs = require('fs');
+
+if (fs.existsSync(indexHtmlPath)) {
+  console.log('✅ Serving React static files from:', buildPath);
+  app.use(express.static(buildPath));
+} else {
+  console.warn('⚠️ React build output not found at:', indexHtmlPath);
+}
 
 // ======= API ROUTES =======
 
@@ -284,9 +292,12 @@ app.get('*', (req, res) => {
     });
     return;
   }
-  
   // Serve React app for all other routes (client-side routing)
-  res.sendFile(path.join(buildPath, 'index.html'));
+  if (fs.existsSync(indexHtmlPath)) {
+    res.sendFile(indexHtmlPath);
+  } else {
+    res.status(500).send('React build output not found. Please run "npm run build" in frontend and rebuild the backend image.');
+  }
 });
 
 // Error handling middleware
