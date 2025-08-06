@@ -1,4 +1,4 @@
-// backend/server.js - Dynamic host IP resolution for Kubernetes Kind
+host// backend/server.js - Dynamic host IP resolution for Kubernetes Kind
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
@@ -10,47 +10,89 @@ const { googleLogin, verifyJWT, logout, getProfile, authenticateToken, healthChe
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Function to get the host IP address dynamically
-const getHostIP = async () => {
+// Function to get the AWS EC2 host IP address dynamically
+const getAWSHostIP = async () => {
   try {
-    // Method 1: Try to get from Kubernetes environment
+    // Method 1: Try AWS EC2 metadata service first (most reliable in AWS)
     const execPromise = promisify(exec);
     
-    // Try to get from route command (most reliable for Kind)
+    try {
+      console.log('🌐 Attempting to get AWS EC2 public IP...');
+      const { stdout: publicIP } = await execPromise("curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo ''");
+      if (publicIP && publicIP.trim().match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        console.log('✅ Got AWS EC2 public IP:', publicIP.trim());
+        return publicIP.trim();
+      }
+    } catch (error) {
+      console.log('❌ Failed to get AWS EC2 public IP:', error.message);
+    }
+
+    try {
+      console.log('🌐 Attempting to get AWS EC2 private IP...');
+      const { stdout: privateIP } = await execPromise("curl -s --connect-timeout 3 http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null || echo ''");
+      if (privateIP && privateIP.trim().match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        console.log('✅ Got AWS EC2 private IP:', privateIP.trim());
+        return privateIP.trim();
+      }
+    } catch (error) {
+      console.log('❌ Failed to get AWS EC2 private IP:', error.message);
+    }
+
+    // Method 2: Try to get from route command (fallback)
     try {
       const { stdout } = await execPromise("ip route show default | awk '/default/ {print $3}'");
       const hostIP = stdout.trim();
       if (hostIP && hostIP.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('Got host IP from route command:', hostIP);
+        console.log('✅ Got host IP from route command:', hostIP);
         return hostIP;
       }
     } catch (error) {
-      console.log('Failed to get IP from route command:', error.message);
+      console.log('❌ Failed to get IP from route command:', error.message);
     }
 
-    // Method 2: Try to get from hostname resolution
+    // Method 3: Try hostname resolution
     try {
       const { stdout } = await execPromise("hostname -I | awk '{print $1}'");
       const hostIP = stdout.trim();
       if (hostIP && hostIP.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-        console.log('Got host IP from hostname -I:', hostIP);
+        console.log('✅ Got host IP from hostname -I:', hostIP);
         return hostIP;
       }
     } catch (error) {
-      console.log('Failed to get IP from hostname -I:', error.message);
+      console.log('❌ Failed to get IP from hostname -I:', error.message);
     }
 
-    // Method 3: Try to get from network interfaces
+    // Method 4: Try to get external IP using curl
+    const externalServices = [
+      'https://api.ipify.org',
+      'https://icanhazip.com',
+      'https://ipinfo.io/ip'
+    ];
+
+    for (const service of externalServices) {
+      try {
+        const { stdout } = await execPromise(`curl -s --connect-timeout 5 ${service}`);
+        const ip = stdout.trim();
+        if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+          console.log(`✅ Got external IP from ${service}:`, ip);
+          return ip;
+        }
+      } catch (error) {
+        console.log(`❌ Failed to get IP from ${service}:`, error.message);
+      }
+    }
+
+    // Method 5: Try network interfaces as last resort
     const interfaces = os.networkInterfaces();
     
-    // Look for common Kind/Docker bridge interfaces first
-    const priorityInterfaces = ['eth0', 'en0', 'enp0s3'];
+    // Look for common AWS interface patterns
+    const priorityInterfaces = ['eth0', 'ens5', 'en0', 'enp0s3'];
     
     for (const interfaceName of priorityInterfaces) {
       if (interfaces[interfaceName]) {
         for (const iface of interfaces[interfaceName]) {
           if (iface.family === 'IPv4' && !iface.internal) {
-            console.log(`Got host IP from interface ${interfaceName}:`, iface.address);
+            console.log(`✅ Got host IP from interface ${interfaceName}:`, iface.address);
             return iface.address;
           }
         }
@@ -61,20 +103,20 @@ const getHostIP = async () => {
     for (const interfaceName in interfaces) {
       for (const iface of interfaces[interfaceName]) {
         if (iface.family === 'IPv4' && !iface.internal) {
-          console.log(`Got host IP from interface ${interfaceName}:`, iface.address);
+          console.log(`✅ Got host IP from interface ${interfaceName}:`, iface.address);
           return iface.address;
         }
       }
     }
 
   } catch (error) {
-    console.error('Error getting host IP:', error.message);
+    console.error('❌ Error getting AWS host IP:', error.message);
   }
 
   return null;
 };
 
-// Function to get all possible allowed origins dynamically
+// Function to get all possible allowed origins dynamically for AWS
 const getAllowedOrigins = async () => {
   const origins = [
     'http://localhost:3000',
@@ -83,34 +125,31 @@ const getAllowedOrigins = async () => {
     'http://mydevopsproject.live'
   ];
 
-  // Try to get the actual host IP
-  const hostIP = await getHostIP();
+  // Try to get the actual AWS host IP
+  const awsHostIP = await getAWSHostIP();
   
-  if (hostIP) {
+  if (awsHostIP) {
     origins.push(
-      `http://${hostIP}:30080`,
-      `http://${hostIP}:3000`,
-      `http://${hostIP}`
+      `http://${awsHostIP}:30080`,
+      `http://${awsHostIP}:3000`,
+      `http://${awsHostIP}`,
+      `https://${awsHostIP}:30080`,
+      `https://${awsHostIP}:3000`,
+      `https://${awsHostIP}`
     );
-    console.log('Added dynamic host IP origins:', hostIP);
+    console.log('✅ Added dynamic AWS host IP origins:', awsHostIP);
   }
 
-  // Add common Kind cluster IPs
-  const commonKindIPs = ['172.18.0.1', '172.17.0.1', '192.168.1.1', '10.0.2.2'];
-  for (const ip of commonKindIPs) {
-    origins.push(
-      `http://${ip}:30080`,
-      `http://${ip}:3000`,
-      `http://${ip}`
-    );
-  }
-
-  // Add regex patterns for dynamic IP matching
+  // Add regex patterns for dynamic IP matching (broader AWS patterns)
   origins.push(
-    /^http:\/\/.*\.live$/,
-    /^http:\/\/localhost:\d+$/,
-    /^http:\/\/\d+\.\d+\.\d+\.\d+:\d+$/, // Any IP:PORT combination
-    /^http:\/\/\d+\.\d+\.\d+\.\d+$/      // Any IP without port
+    /^https?:\/\/.*\.live$/,
+    /^https?:\/\/.*\.live:\d+$/,
+    /^https?:\/\/localhost:\d+$/,
+    /^https?:\/\/127\.0\.0\.1:\d+$/,
+    /^https?:\/\/\d+\.\d+\.\d+\.\d+:\d+$/, // Any IP:PORT combination
+    /^https?:\/\/\d+\.\d+\.\d+\.\d+$/,      // Any IP without port
+    /^https?:\/\/.*\.amazonaws\.com$/,       // AWS domains
+    /^https?:\/\/.*\.compute-1\.amazonaws\.com$/, // AWS EC2 domains
   );
 
   return origins;
@@ -247,7 +286,7 @@ app.get('/health', async (req, res) => {
     client.release();
     
     // Get host information
-    const hostIP = await getHostIP();
+    const awsHostIP = await getAWSHostIP();
     
     res.json({
       status: 'healthy',
@@ -257,7 +296,7 @@ app.get('/health', async (req, res) => {
       database: 'connected',
       version: '1.0.0',
       environment: process.env.NODE_ENV || 'development',
-      hostIP: hostIP,
+      hostIP: awsHostIP,
       hostname: os.hostname(),
       platform: os.platform()
     });
@@ -286,7 +325,7 @@ app.get('/api/health', authenticateToken, async (req, res) => {
     const result = await client.query('SELECT COUNT(*) as user_count FROM users');
     client.release();
     
-    const hostIP = await getHostIP();
+    const awsHostIP = await getAWSHostIP();
     
     res.json({
       status: 'healthy',
@@ -295,7 +334,7 @@ app.get('/api/health', authenticateToken, async (req, res) => {
       database: 'connected',
       userCount: parseInt(result.rows[0].user_count),
       timestamp: new Date().toISOString(),
-      hostIP: hostIP,
+      hostIP: awsHostIP,
       hostname: os.hostname()
     });
   } catch (error) {
@@ -308,7 +347,7 @@ app.get('/api/health', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/metrics', authenticateToken, async (req, res) => {
-  const hostIP = await getHostIP();
+  const awsHostIP = await getAWSHostIP();
   
   const metrics = {
     timestamp: new Date().toISOString(),
@@ -319,7 +358,7 @@ app.get('/api/metrics', authenticateToken, async (req, res) => {
     idleConnections: pool.idleCount,
     platform: process.platform,
     nodeVersion: process.version,
-    hostIP: hostIP,
+    hostIP: awsHostIP,
     hostname: os.hostname()
   };
   
@@ -361,7 +400,7 @@ app.get('/api/users', authenticateToken, async (req, res) => {
 
 // System information endpoint
 app.get('/api/system', authenticateToken, async (req, res) => {
-  const hostIP = await getHostIP();
+  const awsHostIP = await getAWSHostIP();
   
   res.json({
     success: true,
@@ -375,7 +414,7 @@ app.get('/api/system', authenticateToken, async (req, res) => {
       totalmem: os.totalmem(),
       freemem: os.freemem(),
       cpus: os.cpus().length,
-      hostIP: hostIP
+      hostIP: awsHostIP
     },
     database: {
       totalConnections: pool.totalCount,
@@ -386,14 +425,14 @@ app.get('/api/system', authenticateToken, async (req, res) => {
   });
 });
 
-// Network information endpoint (for debugging)
+//Network information endpoint (for debugging)
 app.get('/api/network', authenticateToken, async (req, res) => {
-  const hostIP = await getHostIP();
+  const awsHostIP = await getAWSHostIP();
   const interfaces = os.networkInterfaces();
   
   res.json({
     success: true,
-    hostIP: hostIP,
+    hostIP: awsHostIP,
     hostname: os.hostname(),
     networkInterfaces: interfaces,
     corsOrigins: corsOptions.origin.length
@@ -454,12 +493,12 @@ const startServer = async () => {
     // Initialize CORS with dynamic origins
     await initializeCors();
     
-    // Get and display host IP
-    const hostIP = await getHostIP();
-    if (hostIP) {
-      console.log('🌐 Detected host IP:', hostIP);
+    // Get and display AWS host IP
+    const awsHostIP = await getAWSHostIP();
+    if (awsHostIP) {
+      console.log('🌐 Detected AWS host IP:', awsHostIP);
     } else {
-      console.log('⚠️ Could not detect host IP, using fallback patterns');
+      console.log('⚠️ Could not detect AWS host IP, using fallback patterns');
     }
     
     // Test database connection
@@ -483,13 +522,16 @@ const startServer = async () => {
         console.log('💾 Database: Not connected (some features disabled)');
       }
       
-      // Log networking information
-      if (hostIP) {
-        console.log(`🔗 Frontend should connect to: http://${hostIP}:${PORT}`);
-        console.log(`🔗 NodePort service accessible at: http://${hostIP}:30400`);
+      // Log AWS networking information
+      if (awsHostIP) {
+        console.log(`🔗 Frontend should connect to: http://${awsHostIP}:${PORT}`);
+        console.log(`🔗 NodePort service accessible at: http://${awsHostIP}:30400`);
+        console.log(`🔗 Public access (if configured): http://${awsHostIP}:30080`);
       }
       
       console.log(`📡 CORS configured for ${corsOptions.origin.length} origin patterns`);
+      console.log(`🏠 Hostname: ${os.hostname()}`);
+      console.log(`🌍 Platform: ${os.platform()}`);
     });
     
   } catch (error) {

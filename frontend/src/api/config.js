@@ -1,5 +1,5 @@
-// frontend/src/api/config.js - Dynamic host IP resolution for Kubernetes Kind
-// Enhanced API configuration with automatic host IP detection
+// frontend/src/api/config.js - AWS Host IP Resolution for Kind Cluster
+// Enhanced API configuration with AWS EC2 host IP detection
 
 const getRuntimeConfig = () => {
   // Check if runtime config is available (injected by Docker container)
@@ -9,71 +9,98 @@ const getRuntimeConfig = () => {
   return {};
 };
 
-// Get the Kind cluster host IP dynamically
-const getKindHostIP = async () => {
-  try {
-    // Method 1: Try to get host IP from a public IP service
-    const response = await fetch('https://api.ipify.org?format=json', {
-      method: 'GET',
-      timeout: 3000
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      console.log('Got external IP from ipify:', data.ip);
-      return data.ip;
-    }
-  } catch (error) {
-    console.log('Failed to get external IP from ipify:', error.message);
-  }
-
-  try {
-    // Method 2: Try alternative IP service
-    const response = await fetch('https://httpbin.org/ip', {
-      method: 'GET',
-      timeout: 3000
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      console.log('Got external IP from httpbin:', data.origin);
-      return data.origin.split(',')[0].trim(); // Handle multiple IPs
-    }
-  } catch (error) {
-    console.log('Failed to get external IP from httpbin:', error.message);
-  }
-
-  // Method 3: Try to detect from current hostname/location
+// Get the AWS EC2 host IP dynamically
+const getAWSHostIP = async () => {
+  console.log('🔍 Starting AWS host IP detection...');
+  
+  // Method 1: Check current hostname first
   const hostname = window.location.hostname;
+  console.log('Current hostname:', hostname);
+  
   if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-    console.log('Using current IP from hostname:', hostname);
+    console.log('✅ Using current IP from hostname:', hostname);
     return hostname;
   }
 
-  // Method 4: Try common Kind cluster patterns
-  const kindPatterns = [
-    '172.18.0.1',  // Common Kind host IP
-    '172.17.0.1',  // Docker default bridge
-    '192.168.1.1', // Common router IP
-    '10.0.2.2'     // VirtualBox host IP
+  // Method 2: Try to get AWS EC2 metadata (if accessible from frontend)
+  try {
+    console.log('🌐 Attempting to get AWS EC2 public IP...');
+    
+    // Try AWS EC2 metadata service (usually not accessible from browser, but worth trying)
+    const metadataResponse = await fetch('http://169.254.169.254/latest/meta-data/public-ipv4', {
+      method: 'GET',
+      timeout: 2000,
+      signal: AbortSignal.timeout(2000)
+    });
+    
+    if (metadataResponse.ok) {
+      const awsIP = await metadataResponse.text();
+      if (awsIP && awsIP.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+        console.log('✅ Got AWS EC2 public IP:', awsIP);
+        return awsIP;
+      }
+    }
+  } catch (error) {
+    console.log('❌ AWS metadata not accessible from browser:', error.message);
+  }
+
+  // Method 3: Try external IP detection services
+  const ipServices = [
+    { url: 'https://api.ipify.org?format=json', key: 'ip' },
+    { url: 'https://httpbin.org/ip', key: 'origin' },
+    { url: 'https://icanhazip.com', key: null },
+    { url: 'https://ipinfo.io/ip', key: null }
   ];
 
-  for (const ip of kindPatterns) {
+  for (const service of ipServices) {
     try {
-      // Test if this IP responds on port 30400
-      const testResponse = await fetch(`http://${ip}:30400/health`, {
+      console.log(`🌐 Trying IP service: ${service.url}`);
+      
+      const response = await fetch(service.url, {
         method: 'GET',
-        timeout: 2000,
-        mode: 'no-cors' // Bypass CORS for testing
+        timeout: 5000,
+        signal: AbortSignal.timeout(5000)
       });
-      console.log(`Kind pattern IP ${ip} is reachable`);
-      return ip;
+      
+      if (response.ok) {
+        let ip;
+        if (service.key) {
+          const data = await response.json();
+          ip = service.key === 'origin' ? data[service.key].split(',')[0].trim() : data[service.key];
+        } else {
+          ip = (await response.text()).trim();
+        }
+        
+        if (ip && ip.match(/^\d+\.\d+\.\d+\.\d+$/)) {
+          console.log(`✅ Got host IP from ${service.url}:`, ip);
+          return ip;
+        }
+      }
     } catch (error) {
-      console.log(`Kind pattern IP ${ip} not reachable:`, error.message);
+      console.log(`❌ Failed to get IP from ${service.url}:`, error.message);
     }
   }
 
-  // Fallback: return null to use hostname-based detection
+  // Method 4: Try to resolve from domain if it's a known domain
+  if (hostname && hostname.includes('mydevopsproject.live')) {
+    try {
+      console.log('🔍 Attempting DNS resolution for domain...');
+      
+      // Try a simple ping-like test to different common AWS patterns
+      const commonAWSPatterns = [
+        '18.', '52.', '54.', '3.', '13.', '35.', '34.', // Common AWS IP prefixes
+      ];
+      
+      // This won't work directly, but we can try to detect patterns
+      console.log('ℹ️ Domain detected, will test backend connectivity patterns');
+      
+      return hostname; // Return domain for now, will test connectivity later
+    } catch (error) {
+      console.log('❌ DNS resolution failed:', error.message);
+    }
+  }
+
+  console.log('⚠️ No AWS host IP detected, will use fallback patterns');
   return null;
 };
 
@@ -82,7 +109,7 @@ const getBackendUrl = () => {
   
   // Priority order:
   // 1. Runtime environment (Docker injection)
-  // 2. Build-time environment variable
+  // 2. Build-time environment variable  
   // 3. Dynamic detection based on current location
   
   const runtimeBackendUrl = runtimeConfig.REACT_APP_BACKEND_URL;
@@ -98,26 +125,14 @@ const getBackendUrl = () => {
     return buildTimeBackendUrl;
   }
   
-  // Dynamic detection with better URL handling
+  // Dynamic detection for AWS deployment
   if (process.env.NODE_ENV === 'production') {
     const hostname = window.location.hostname;
     
-    // Check if we're accessing via a domain name
-    if (hostname.includes('mydevopsproject.live')) {
-      // For production domain, we'll resolve the IP later
-      const dynamicUrl = `http://${hostname}:30400`;
-      console.log('Using domain-based backend URL (will resolve IP):', dynamicUrl);
-      return dynamicUrl;
-    } else if (hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-      // If accessing via IP directly
-      const dynamicUrl = `http://${hostname}:30400`;
-      console.log('Using IP-based backend URL:', dynamicUrl);
-      return dynamicUrl;
-    } else {
-      const dynamicUrl = `http://${hostname}:30400`;
-      console.log('Using hostname-based backend URL:', dynamicUrl);
-      return dynamicUrl;
-    }
+    // For Kind cluster on AWS, use NodePort (30400)
+    const dynamicUrl = `http://${hostname}:30400`;
+    console.log('Using dynamic AWS backend URL:', dynamicUrl);
+    return dynamicUrl;
   }
   
   // Development fallback
@@ -126,11 +141,11 @@ const getBackendUrl = () => {
   return devUrl;
 };
 
-// Test backend connectivity with enhanced error handling and shorter timeout
+// Test backend connectivity with enhanced error handling
 const testBackendConnection = async (url) => {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
     
     console.log(`Testing backend connection to: ${url}`);
     
@@ -158,7 +173,8 @@ const testBackendConnection = async (url) => {
       console.log('✅ Backend connection successful:', {
         url,
         status: response.status,
-        data: data
+        health: data.status,
+        uptime: data.uptime
       });
       return { success: true, data, status: response.status };
     } else {
@@ -180,7 +196,7 @@ const testBackendConnection = async (url) => {
   }
 };
 
-// Get the best available backend URL with dynamic IP resolution
+// Get the best available backend URL with AWS IP resolution
 const getBestBackendUrl = async () => {
   const primaryUrl = getBackendUrl();
   
@@ -190,49 +206,39 @@ const getBestBackendUrl = async () => {
     return { url: primaryUrl, result: primaryResult };
   }
   
-  console.log('Primary URL failed, trying fallbacks with dynamic IP resolution...');
+  console.log('Primary URL failed, trying AWS host IP resolution...');
   
-  // Generate fallback URLs based on current environment
+  // Try to get the actual AWS host IP
+  let awsHostIP = null;
+  try {
+    awsHostIP = await getAWSHostIP();
+  } catch (error) {
+    console.log('Failed to get AWS host IP:', error.message);
+  }
+  
+  // Generate fallback URLs based on AWS deployment
   const hostname = window.location.hostname;
   const fallbackUrls = [];
   
-  // Try to get the actual host IP for Kind cluster
-  let hostIP = null;
-  try {
-    hostIP = await getKindHostIP();
-  } catch (error) {
-    console.log('Failed to get Kind host IP:', error.message);
-  }
-  
-  // Add IP-based fallbacks if we got a host IP
-  if (hostIP && hostIP !== hostname) {
+  // Add AWS host IP based URLs if we got one
+  if (awsHostIP && awsHostIP !== hostname) {
     fallbackUrls.push(
-      `http://${hostIP}:30400`,
-      `http://${hostIP}:4000`
+      `http://${awsHostIP}:30400`,  // Kind NodePort service
+      `http://${awsHostIP}:4000`,   // Direct backend port
+      `http://${awsHostIP}`         // Default HTTP port
     );
   }
   
-  // Add other fallback patterns
-  if (hostname.includes('mydevopsproject.live') || hostname.match(/^\d+\.\d+\.\d+\.\d+$/)) {
-    // Try common Kind cluster IPs
-    const kindIPs = ['172.18.0.1', '172.17.0.1', '192.168.1.1', '10.0.2.2'];
-    for (const ip of kindIPs) {
-      fallbackUrls.push(
-        `http://${ip}:30400`,
-        `http://${ip}:4000`
-      );
-    }
-    
-    // Add current hostname fallbacks
+  // Add current hostname based URLs
+  fallbackUrls.push(
+    `http://${hostname}:30400`,
+    `http://${hostname}:4000`,
+    `http://${hostname}`
+  );
+  
+  // Add localhost for development testing
+  if (process.env.NODE_ENV !== 'production') {
     fallbackUrls.push(
-      `http://${hostname}:30400`,
-      `http://${hostname}:4000`
-    );
-  } else {
-    // Add development and general fallbacks
-    fallbackUrls.push(
-      `http://${hostname}:30400`,
-      `http://${hostname}:4000`,
       'http://localhost:30400',
       'http://localhost:4000',
       'http://127.0.0.1:30400',
@@ -252,7 +258,7 @@ const getBestBackendUrl = async () => {
     }
     
     // Small delay between attempts
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise(resolve => setTimeout(resolve, 300));
   }
   
   console.error('❌ All backend connection attempts failed');
@@ -274,7 +280,8 @@ let CONNECTION_RESULT = null;
 // Attempt to find the best URL on module load with timeout
 const initializeApiConfig = async () => {
   try {
-    // Add a maximum initialization time
+    console.log('🚀 Initializing API configuration for AWS deployment...');
+    
     const initializationPromise = getBestBackendUrl();
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('API initialization timeout')), 15000)
@@ -316,10 +323,10 @@ const initializeApiConfig = async () => {
 // Start initialization
 initializeApiConfig();
 
-// Export commonly used endpoints
+// Export commonly used endpoints  
 const getApiEndpoints = () => ({
   HEALTH: `${API_BASE_URL}/health`,
-  API_HEALTH: `${API_BASE_URL}/api/health`,
+  API_HEALTH: `${API_BASE_URL}/api/health`, 
   METRICS: `${API_BASE_URL}/api/metrics`,
   USERS: `${API_BASE_URL}/api/users`,
   AUTH_GOOGLE: `${API_BASE_URL}/auth/google`,
@@ -387,7 +394,7 @@ export {
   getConnectionStatus,
   getRuntimeConfig,
   waitForInitialization,
-  getKindHostIP
+  getAWSHostIP
 };
 
 export default {
@@ -400,5 +407,5 @@ export default {
   getConnectionStatus,
   getRuntimeConfig,
   waitForInitialization,
-  getKindHostIP
+  getAWSHostIP
 };
