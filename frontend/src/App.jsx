@@ -4,7 +4,7 @@ import { AuthProvider, useAuthContext } from './context/AuthContext.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import ChatPage from './pages/ChatPage.jsx';
 import Dashboard from './pages/Dashboard.jsx';
-import UserManagement from './pages/UserManagement.jsx';
+import UserManagement from './components/UserManagement.jsx';
 
 function PrivateRoute({ children }) {
   const { user } = useAuthContext();
