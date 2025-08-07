@@ -1,3 +1,4 @@
+// frontend/src/context/AuthContext.jsx - FIXED with event listeners
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { useAuth } from '../api/auth.js';
 import authService from '../services/authService.js';
@@ -30,6 +31,7 @@ export function AuthProvider({ children }) {
             const currentUser = await authService.getCurrentUser();
             if (currentUser) {
               setUser(currentUser);
+              localStorage.setItem('user', JSON.stringify(currentUser));
             }
           } catch (backendError) {
             console.warn('Backend verification failed, but keeping local user:', backendError);
@@ -49,6 +51,31 @@ export function AuthProvider({ children }) {
     };
 
     initializeAuth();
+
+    // Listen for login/logout events
+    const handleUserLoggedIn = (event) => {
+      console.log('User logged in event received:', event.detail);
+      setUser(event.detail);
+      setLoading(false);
+      setError(null);
+    };
+
+    const handleUserLoggedOut = () => {
+      console.log('User logged out event received');
+      setUser(null);
+      setLoading(false);
+      setError(null);
+    };
+
+    // Add event listeners
+    window.addEventListener('userLoggedIn', handleUserLoggedIn);
+    window.addEventListener('userLoggedOut', handleUserLoggedOut);
+
+    // Cleanup event listeners
+    return () => {
+      window.removeEventListener('userLoggedIn', handleUserLoggedIn);
+      window.removeEventListener('userLoggedOut', handleUserLoggedOut);
+    };
   }, []);
 
   // Login function
@@ -59,7 +86,7 @@ export function AuthProvider({ children }) {
     try {
       console.log('Starting Google login...');
       await googleLogin();
-      // The actual user setting happens in the useAuth hook's success callback
+      // The actual user setting happens in the event handler
     } catch (error) {
       console.error('Login failed:', error);
       setError(error.message || 'Login failed');
@@ -92,6 +119,7 @@ export function AuthProvider({ children }) {
       const updatedUser = await authService.getCurrentUser();
       if (updatedUser) {
         setUser(updatedUser);
+        localStorage.setItem('user', JSON.stringify(updatedUser));
         return updatedUser;
       }
     } catch (error) {
@@ -102,6 +130,7 @@ export function AuthProvider({ children }) {
 
   // Function for external components to update user
   const updateUser = (userData) => {
+    console.log('Updating user data:', userData);
     setUser(userData);
     localStorage.setItem('user', JSON.stringify(userData));
   };

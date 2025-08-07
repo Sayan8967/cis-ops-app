@@ -1,3 +1,4 @@
+// frontend/src/pages/LoginPage.jsx - FIXED redirect logic
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext.jsx';
 import authService from '../services/authService.js';
@@ -35,12 +36,9 @@ export default function LoginPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (user) {
-      window.location.href = '/dashboard';
-    }
-  }, [user]);
+  // REMOVED: Auto-redirect logic from here
+  // The redirect is now handled by PublicRoute in App.jsx
+  // This prevents the infinite loading issue
 
   const handleGoogleLogin = () => {
     clearError();
@@ -259,6 +257,8 @@ export default function LoginPage() {
           {process.env.NODE_ENV === 'development' && (
             <div className="mt-4 text-xs text-blue-400">
               <p>Debug: Connection Status: {connectionStatus}</p>
+              <p>User: {user ? user.email : 'Not logged in'}</p>
+              <p>Loading: {loading.toString()}</p>
               {authService.getApiBaseUrl() && (
                 <p>Backend URL: {authService.getApiBaseUrl()}</p>
               )}

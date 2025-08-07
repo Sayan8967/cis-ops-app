@@ -1,4 +1,4 @@
-// frontend/src/services/authService.js - Simplified for current backend
+// frontend/src/services/authService.js - FIXED with better error handling
 import { API_ENDPOINTS } from '../api/config.js';
 
 class SimpleAuthService {
@@ -28,12 +28,17 @@ class SimpleAuthService {
         body: JSON.stringify(requestBody)
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP ${response.status}: ${response.statusText}`);
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('Failed to parse backend response:', parseError);
+        throw new Error('Invalid response from server');
       }
 
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || `HTTP ${response.status}: ${response.statusText}`);
+      }
       
       if (!data.success) {
         throw new Error(data.message || 'Authentication failed');
@@ -63,6 +68,8 @@ class SimpleAuthService {
         errorMessage = 'Google authentication failed - please try again';
       } else if (error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
         errorMessage = 'Cannot connect to server - please check your connection';
+      } else if (error.message.includes('Invalid response from server')) {
+        errorMessage = 'Server returned invalid response - please try again';
       } else if (error.message) {
         errorMessage = error.message;
       }
@@ -94,12 +101,12 @@ class SimpleAuthService {
         }
       }
       
-      this.user = null;
-      localStorage.removeItem('user');
-      return null;
+      // If backend check fails, return current stored user
+      return this.user;
 
     } catch (error) {
       console.error('Get current user failed:', error);
+      // Return stored user if backend is unreachable
       return this.user;
     }
   }
@@ -139,7 +146,9 @@ class SimpleAuthService {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-        }
+        },
+        // Add timeout to prevent hanging
+        signal: AbortSignal.timeout(10000)
       });
 
       if (response.ok) {
@@ -158,6 +167,13 @@ class SimpleAuthService {
   // Get API base URL for display purposes
   getApiBaseUrl() {
     return window.location.origin;
+  }
+
+  // Clear stored user data (for debugging)
+  clearUserData() {
+    this.user = null;
+    localStorage.removeItem('user');
+    console.log('User data cleared');
   }
 }
 

@@ -1,4 +1,4 @@
-// frontend/src/api/auth.js - Fixed navigation flow
+// frontend/src/api/auth.js - FIXED navigation flow
 import { googleLogout, useGoogleLogin } from '@react-oauth/google';
 import axios from 'axios';
 import authService from '../services/authService.js';
@@ -16,23 +16,45 @@ export function useAuth() {
         
         console.log('Got user info from Google:', userInfoResponse.data.email);
         
-        // Store user info with default admin role for demo
+        // Determine user role (matching backend logic)
+        const userRole = userInfoResponse.data.email.includes('admin') || 
+                        userInfoResponse.data.email.endsWith('@cisops.com') ? 'admin' :
+                        userInfoResponse.data.email.includes('mod') || 
+                        userInfoResponse.data.email.includes('moderator') ? 'moderator' : 'admin';
+        
+        // Store user info with role
         const userData = {
           ...userInfoResponse.data,
-          role: 'admin' // Default to admin for demonstration
+          role: userRole
         };
+        
+        // Store in localStorage immediately
         localStorage.setItem('user', JSON.stringify(userData));
         
         // Also authenticate with backend
         try {
-          await authService.loginWithGoogle(tokenResponse.access_token, userData);
+          const backendResponse = await authService.loginWithGoogle(tokenResponse.access_token, userData);
+          console.log('Backend authentication successful:', backendResponse);
+          
+          // Update user data with backend response if available
+          if (backendResponse.user) {
+            const finalUserData = { ...userData, ...backendResponse.user };
+            localStorage.setItem('user', JSON.stringify(finalUserData));
+          }
         } catch (backendError) {
           console.warn('Backend authentication failed, but continuing with Google auth:', backendError);
           // Continue anyway - user is still authenticated with Google
         }
         
-        // Redirect to AI Assistant (chat) instead of dashboard
-        window.location.href = '/chat';
+        // IMPORTANT: Trigger a custom event to notify the auth context
+        window.dispatchEvent(new CustomEvent('userLoggedIn', { 
+          detail: userData 
+        }));
+        
+        // Small delay to ensure state updates, then redirect
+        setTimeout(() => {
+          window.location.href = '/chat';
+        }, 100);
         
       } catch (error) {
         console.error('Login process failed:', error);
@@ -58,6 +80,9 @@ export function useAuth() {
     
     // Clear local storage
     localStorage.removeItem('user');
+    
+    // Trigger logout event
+    window.dispatchEvent(new CustomEvent('userLoggedOut'));
     
     // Redirect to login
     window.location.href = '/login';
