@@ -1,4 +1,4 @@
-// frontend/src/api/auth.js - Simplified auth hook (based on your working version)
+// frontend/src/api/auth.js - Fixed navigation flow
 import { googleLogout, useGoogleLogin } from '@react-oauth/google';
 import axios from 'axios';
 import authService from '../services/authService.js';
@@ -16,19 +16,23 @@ export function useAuth() {
         
         console.log('Got user info from Google:', userInfoResponse.data.email);
         
-        // Store user info locally (simplified approach)
-        localStorage.setItem('user', JSON.stringify(userInfoResponse.data));
+        // Store user info with default admin role for demo
+        const userData = {
+          ...userInfoResponse.data,
+          role: 'admin' // Default to admin for demonstration
+        };
+        localStorage.setItem('user', JSON.stringify(userData));
         
         // Also authenticate with backend
         try {
-          await authService.loginWithGoogle(tokenResponse.access_token, userInfoResponse.data);
+          await authService.loginWithGoogle(tokenResponse.access_token, userData);
         } catch (backendError) {
           console.warn('Backend authentication failed, but continuing with Google auth:', backendError);
           // Continue anyway - user is still authenticated with Google
         }
         
-        // Redirect to dashboard
-        window.location.href = '/dashboard';
+        // Redirect to AI Assistant (chat) instead of dashboard
+        window.location.href = '/chat';
         
       } catch (error) {
         console.error('Login process failed:', error);

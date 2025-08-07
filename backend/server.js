@@ -1,5 +1,6 @@
-// backend/server.js - Simplified version serving React static files (No JWT)
+// backend/server.js - Enhanced with user role support
 const express = require('express');
+const cors = require('cors');
 const path = require('path');
 const { Pool } = require('pg');
 const axios = require('axios');
@@ -8,7 +9,18 @@ const os = require('os');
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// Database connection (simplified - optional)
+// CORS configuration for Kubernetes
+const corsOptions = {
+  origin: ['http://localhost:3000', 'http://localhost:30080', 'http://mydevopsproject.live:30080', '*'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false,
+  optionsSuccessStatus: 200
+};
+
+app.use(cors(corsOptions));
+
+// Database connection (optional)
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',
   port: process.env.DB_PORT || 5432,
@@ -21,7 +33,7 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000,
 });
 
-// Test database connection (optional)
+// Test database connection
 const testDatabaseConnection = async () => {
   try {
     const client = await pool.connect();
@@ -35,8 +47,47 @@ const testDatabaseConnection = async () => {
   }
 };
 
-// Mock user storage (since no database required)
+// Mock user storage with roles
 let currentUser = null;
+
+// Mock users database
+const mockUsers = [
+  {
+    id: 1,
+    name: 'Admin User',
+    email: 'admin@cisops.com',
+    role: 'admin',
+    status: 'active',
+    lastLogin: new Date().toISOString()
+  },
+  {
+    id: 2,
+    name: 'Moderator User',
+    email: 'mod@cisops.com',
+    role: 'moderator',
+    status: 'active',
+    lastLogin: new Date(Date.now() - 86400000).toISOString()
+  },
+  {
+    id: 3,
+    name: 'Regular User',
+    email: 'user@cisops.com',
+    role: 'user',
+    status: 'active',
+    lastLogin: new Date(Date.now() - 172800000).toISOString()
+  }
+];
+
+// Helper function to determine user role
+const determineUserRole = (email) => {
+  // Assign roles based on email patterns for demo
+  if (email.includes('admin') || email.endsWith('@cisops.com')) {
+    return 'admin';
+  } else if (email.includes('mod') || email.includes('moderator')) {
+    return 'moderator';
+  }
+  return 'admin'; // Default to admin for demo purposes
+};
 
 // Mock metrics data
 const getSimpleMetrics = () => {
@@ -86,7 +137,13 @@ app.use((req, res, next) => {
   next();
 });
 
-// Do not serve React static files in backend. Only serve API endpoints.
+// Handle preflight OPTIONS requests
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.sendStatus(200);
+});
 
 // ======= API ROUTES =======
 
@@ -96,12 +153,12 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
-    version: '1.0.0',
-    user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
+    version: '2.0.0',
+    user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
   });
 });
 
-// Google OAuth login - Simplified
+// Google OAuth login with role assignment
 app.post('/api/auth/google', async (req, res) => {
   try {
     const { token, userInfo } = req.body;
@@ -151,18 +208,21 @@ app.post('/api/auth/google', async (req, res) => {
       });
     }
     
-    // Store user data (simplified - just in memory)
+    // Determine user role
+    const userRole = determineUserRole(googleUserData.email);
+    
+    // Store user data with role
     currentUser = {
-      id: Date.now(), // Simple ID
+      id: Date.now(),
       name: googleUserData.name,
       email: googleUserData.email,
       picture: googleUserData.picture,
-      role: 'user',
+      role: userRole,
       status: 'active',
       loginTime: new Date().toISOString()
     };
     
-    console.log('Login successful for user:', currentUser.email);
+    console.log('Login successful for user:', currentUser.email, 'with role:', currentUser.role);
     
     res.json({
       success: true,
@@ -228,7 +288,7 @@ app.get('/api/metrics', (req, res) => {
     res.json({
       success: true,
       current: metrics,
-      user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
+      user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
     });
   } catch (error) {
     console.error('Error in /api/metrics:', error);
@@ -240,13 +300,165 @@ app.get('/api/metrics', (req, res) => {
   }
 });
 
-// Users endpoint (simplified)
+// Users endpoint with role-based access
 app.get('/api/users', (req, res) => {
-  const users = currentUser ? [currentUser] : [];
+  // Check if user is authenticated and has appropriate role
+  if (!currentUser) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  // Only moderators and admins can view users
+  if (currentUser.role !== 'admin' && currentUser.role !== 'moderator') {
+    return res.status(403).json({
+      success: false,
+      message: 'Insufficient permissions. Moderator or admin role required.'
+    });
+  }
+
+  // Add current user to mock users if not already present
+  const allUsers = [...mockUsers];
+  
+  // Add current user if not in mock data
+  if (!allUsers.find(u => u.email === currentUser.email)) {
+    allUsers.unshift({
+      id: currentUser.id,
+      name: currentUser.name,
+      email: currentUser.email,
+      role: currentUser.role,
+      status: currentUser.status,
+      lastLogin: currentUser.loginTime
+    });
+  }
+
   res.json({
     success: true,
-    users: users,
-    count: users.length
+    users: allUsers,
+    count: allUsers.length,
+    currentUserRole: currentUser.role
+  });
+});
+
+// Create user endpoint (admin only)
+app.post('/api/users', (req, res) => {
+  if (!currentUser || currentUser.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin role required to create users'
+    });
+  }
+
+  const { name, email, role, status } = req.body;
+  
+  // Validate required fields
+  if (!name || !email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Name and email are required'
+    });
+  }
+
+  // Check if user already exists
+  if (mockUsers.find(u => u.email === email)) {
+    return res.status(400).json({
+      success: false,
+      message: 'User with this email already exists'
+    });
+  }
+
+  const newUser = {
+    id: Date.now(),
+    name,
+    email,
+    role: role || 'user',
+    status: status || 'active',
+    lastLogin: null,
+    createdAt: new Date().toISOString()
+  };
+
+  mockUsers.push(newUser);
+
+  res.json({
+    success: true,
+    message: 'User created successfully',
+    user: newUser
+  });
+});
+
+// Update user endpoint (admin only)
+app.put('/api/users/:id', (req, res) => {
+  if (!currentUser || currentUser.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin role required to update users'
+    });
+  }
+
+  const userId = parseInt(req.params.id);
+  const { name, email, role, status } = req.body;
+
+  const userIndex = mockUsers.findIndex(u => u.id === userId);
+  
+  if (userIndex === -1) {
+    return res.status(404).json({
+      success: false,
+      message: 'User not found'
+    });
+  }
+
+  // Update user
+  mockUsers[userIndex] = {
+    ...mockUsers[userIndex],
+    name: name || mockUsers[userIndex].name,
+    email: email || mockUsers[userIndex].email,
+    role: role || mockUsers[userIndex].role,
+    status: status || mockUsers[userIndex].status,
+    updatedAt: new Date().toISOString()
+  };
+
+  res.json({
+    success: true,
+    message: 'User updated successfully',
+    user: mockUsers[userIndex]
+  });
+});
+
+// Delete user endpoint (admin only)
+app.delete('/api/users/:id', (req, res) => {
+  if (!currentUser || currentUser.role !== 'admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Admin role required to delete users'
+    });
+  }
+
+  const userId = parseInt(req.params.id);
+  
+  // Prevent deleting current user
+  if (currentUser.id === userId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot delete your own account'
+    });
+  }
+
+  const userIndex = mockUsers.findIndex(u => u.id === userId);
+  
+  if (userIndex === -1) {
+    return res.status(404).json({
+      success: false,
+      message: 'User not found'
+    });
+  }
+
+  const deletedUser = mockUsers.splice(userIndex, 1)[0];
+
+  res.json({
+    success: true,
+    message: 'User deleted successfully',
+    user: deletedUser
   });
 });
 
@@ -266,11 +478,9 @@ app.get('/api/system', (req, res) => {
       cpus: os.cpus().length
     },
     environment: process.env.NODE_ENV || 'development',
-    user: currentUser ? { name: currentUser.name, email: currentUser.email } : null
+    user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
   });
 });
-
-// Only handle API routes. Remove catch-all for static files.
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -279,6 +489,15 @@ app.use((err, req, res, next) => {
     success: false,
     message: 'Internal server error',
     error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'API endpoint not found',
+    path: req.path
   });
 });
 
@@ -298,7 +517,7 @@ process.on('SIGINT', async () => {
 // Start server
 const startServer = async () => {
   try {
-    console.log('🚀 Starting Simplified CIS-Ops Backend...');
+    console.log('🚀 Starting Enhanced CIS-Ops Backend...');
     console.log('Environment:', process.env.NODE_ENV || 'development');
     console.log('Port:', PORT);
     
@@ -316,9 +535,12 @@ const startServer = async () => {
       console.log('  POST /api/auth/logout');
       console.log('📈 API endpoints:');
       console.log('  GET  /api/metrics');
-      console.log('  GET  /api/users');
+      console.log('  GET  /api/users (role-based)');
+      console.log('  POST /api/users (admin only)');
+      console.log('  PUT  /api/users/:id (admin only)');
+      console.log('  DELETE /api/users/:id (admin only)');
       console.log('  GET  /api/system');
-      console.log('🌐 React App: All other routes serve React static files');
+      console.log('🔒 CORS enabled for Kubernetes');
       console.log(`🏠 Hostname: ${os.hostname()}`);
       console.log(`🌍 Platform: ${os.platform()}`);
       console.log('=====================================');

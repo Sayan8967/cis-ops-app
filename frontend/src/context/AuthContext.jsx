@@ -1,4 +1,3 @@
-// frontend/src/context/AuthContext.jsx - Simplified Auth Context
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { useAuth } from '../api/auth.js';
 import authService from '../services/authService.js';
@@ -34,7 +33,6 @@ export function AuthProvider({ children }) {
             }
           } catch (backendError) {
             console.warn('Backend verification failed, but keeping local user:', backendError);
-            // Keep the user from localStorage even if backend fails
           }
         } else {
           console.log('No stored user found');
@@ -60,8 +58,8 @@ export function AuthProvider({ children }) {
     
     try {
       console.log('Starting Google login...');
-      googleLogin();
-      // Note: googleLogin handles the rest asynchronously
+      await googleLogin();
+      // The actual user setting happens in the useAuth hook's success callback
     } catch (error) {
       console.error('Login failed:', error);
       setError(error.message || 'Login failed');
@@ -102,6 +100,69 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // Function for external components to update user
+  const updateUser = (userData) => {
+    setUser(userData);
+    localStorage.setItem('user', JSON.stringify(userData));
+  };
+
+  // Check if user has specific role
+  const hasRole = (requiredRole) => {
+    if (!user) return false;
+    
+    const roleHierarchy = {
+      'user': 1,
+      'moderator': 2,
+      'admin': 3
+    };
+    
+    const userLevel = roleHierarchy[user.role] || 0;
+    const requiredLevel = roleHierarchy[requiredRole] || 0;
+    
+    return userLevel >= requiredLevel;
+  };
+
+  // Get API instance (simplified)
+  const getApiInstance = () => {
+    // Since we're not using JWT, just return a simple fetch wrapper
+    return {
+      get: async (url) => {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      },
+      post: async (url, data) => {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      },
+      put: async (url, data) => {
+        const response = await fetch(url, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      },
+      delete: async (url) => {
+        const response = await fetch(url, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      }
+    };
+  };
+
   const contextValue = {
     user,
     loading,
@@ -109,6 +170,9 @@ export function AuthProvider({ children }) {
     login,
     logout,
     refreshProfile,
+    updateUser,
+    hasRole,
+    getApiInstance,
     isAuthenticated: !!(user && user.email),
     clearError: () => setError(null),
   };

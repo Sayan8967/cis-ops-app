@@ -1,18 +1,17 @@
-// frontend/src/services/authService.js - Simplified Authentication Service (No JWT)
+// frontend/src/services/authService.js - Simplified for current backend
 import { API_ENDPOINTS } from '../api/config.js';
 
 class SimpleAuthService {
   constructor() {
     this.user = JSON.parse(localStorage.getItem('user') || 'null');
-    console.log('Simple Auth Service initialized');
+    console.log('Auth Service initialized');
   }
 
-  // Google OAuth login - simplified
+  // Google OAuth login
   async loginWithGoogle(googleAccessToken, userInfo = null) {
     try {
-      console.log('Starting simplified Google authentication...');
+      console.log('Starting Google authentication...');
       
-      // If userInfo is provided, use it; otherwise let backend fetch it
       const requestBody = {
         token: googleAccessToken
       };
@@ -40,21 +39,22 @@ class SimpleAuthService {
         throw new Error(data.message || 'Authentication failed');
       }
 
-      // Store user data locally
-      this.user = data.user;
+      // Store user data with role
+      this.user = {
+        ...data.user,
+        role: data.user.role || 'admin' // Default to admin for demo
+      };
       localStorage.setItem('user', JSON.stringify(this.user));
 
-      console.log('Login successful for:', this.user.email);
+      console.log('Login successful for:', this.user.email, 'Role:', this.user.role);
       return { success: true, user: this.user };
 
     } catch (error) {
       console.error('Google login failed:', error);
       
-      // Clear any partial auth state
       this.user = null;
       localStorage.removeItem('user');
       
-      // Provide specific error messages
       let errorMessage = 'Login failed';
       
       if (error.message.includes('timeout') || error.name === 'AbortError') {
@@ -84,20 +84,22 @@ class SimpleAuthService {
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
-          this.user = data.user;
+          // Ensure user has a role
+          this.user = {
+            ...data.user,
+            role: data.user.role || 'admin' // Default to admin for demo
+          };
           localStorage.setItem('user', JSON.stringify(this.user));
           return this.user;
         }
       }
       
-      // If server says not authenticated, clear local storage
       this.user = null;
       localStorage.removeItem('user');
       return null;
 
     } catch (error) {
       console.error('Get current user failed:', error);
-      // On error, keep local state but don't throw
       return this.user;
     }
   }
@@ -105,23 +107,15 @@ class SimpleAuthService {
   // Logout
   async logout() {
     try {
-      // Try to notify server (don't wait too long)
-      await Promise.race([
-        fetch(API_ENDPOINTS.AUTH_LOGOUT, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          }
-        }),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Logout timeout')), 3000)
-        )
-      ]);
+      await fetch(API_ENDPOINTS.AUTH_LOGOUT, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
     } catch (error) {
-      console.error('Logout API call failed:', error);
-      // Continue with local cleanup regardless
+      console.warn('Backend logout failed:', error);
     } finally {
-      // Clear local storage regardless of API call success
       this.user = null;
       localStorage.removeItem('user');
       console.log('User logged out successfully');
@@ -138,7 +132,7 @@ class SimpleAuthService {
     return this.user;
   }
 
-  // Health check method
+  // Health check
   async healthCheck() {
     try {
       const response = await fetch(API_ENDPOINTS.HEALTH, {
@@ -161,9 +155,9 @@ class SimpleAuthService {
     }
   }
 
-  // Wait for initialization (simplified - always ready)
-  async waitForInitialization() {
-    return true;
+  // Get API base URL for display purposes
+  getApiBaseUrl() {
+    return window.location.origin;
   }
 }
 
