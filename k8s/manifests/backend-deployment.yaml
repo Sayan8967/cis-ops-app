@@ -15,29 +15,15 @@ spec:
       labels:
         app: cis-ops-backend
     spec:
-      initContainers:
-      - name: wait-for-postgres
-        image: postgres:15-alpine
-        command: 
-        - sh
-        - -c
-        - |
-          until pg_isready -h postgres-service -p 5432 -U cisops; do
-            echo "Waiting for PostgreSQL..."
-            sleep 2
-          done
-          echo "PostgreSQL is ready!"
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:930eeed81ce225f208900c53179d31a32a08374c
+        image: docker.io/sayan896/cis-ops-backend:05fa3b18d2fda02ea52f72b2ae3f8b4bbdd6a80c
         ports:
         - containerPort: 4000
           name: http
         envFrom:
         - configMapRef:
             name: backend-config
-        - secretRef:
-            name: backend-secret
         resources:
           requests:
             memory: "256Mi"
@@ -49,7 +35,7 @@ spec:
           httpGet:
             path: /api/health
             port: 4000
-          initialDelaySeconds: 60  # Increased for DB initialization
+          initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
@@ -57,15 +43,15 @@ spec:
           httpGet:
             path: /api/health
             port: 4000
-          initialDelaySeconds: 30
+          initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
-        startupProbe:  # Added startup probe for slow initialization
+        startupProbe:
           httpGet:
             path: /api/health
             port: 4000
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          timeoutSeconds: 5
-          failureThreshold: 30
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 12

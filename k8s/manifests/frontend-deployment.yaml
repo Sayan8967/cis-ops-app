@@ -17,13 +17,11 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: docker.io/sayan896/cis-ops-frontend:930eeed81ce225f208900c53179d31a32a08374c
+        image: docker.io/sayan896/cis-ops-frontend:05fa3b18d2fda02ea52f72b2ae3f8b4bbdd6a80c
         ports:
         - containerPort: 80
           name: http
-        env:
-        - name: REACT_APP_BACKEND_URL
-          value: "http://mydevopsproject.live:30400"
+        # REMOVED: REACT_APP_BACKEND_URL env var - using relative URLs now
         resources:
           requests:
             memory: "128Mi"
