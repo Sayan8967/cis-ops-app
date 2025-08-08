@@ -17,15 +17,13 @@ spec:
     spec:
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:ec4401a9d83e113c82dac1a1fa538a90a888ca06
+        image: docker.io/sayan896/cis-ops-backend:20e2f8de8a08040aecb4207d2a4280ed5395677b
         ports:
         - containerPort: 4000
           name: http
         envFrom:
         - configMapRef:
             name: backend-config
-        - secretRef:
-            name: backend-secret
         resources:
           requests:
             memory: "256Mi"

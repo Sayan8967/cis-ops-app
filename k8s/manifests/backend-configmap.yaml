@@ -6,7 +6,3 @@ metadata:
 data:
   NODE_ENV: "production"
   PORT: "4000"
-  DB_HOST: "postgres-service"
-  DB_NAME: "cisops"
-  DB_USER: "cisops"
-  DB_PORT: "5432"
