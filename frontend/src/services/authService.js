@@ -81,11 +81,16 @@ class SimpleAuthService {
   // Check current user status
   async getCurrentUser() {
     try {
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      if (this.user?.email) {
+        headers['X-User-Email'] = this.user.email;
+      }
+
       const response = await fetch(API_ENDPOINTS.AUTH_USER, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        }
+        headers
       });
 
       if (response.ok) {

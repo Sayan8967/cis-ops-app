@@ -2,21 +2,9 @@
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const bcrypt = require('bcryptjs');
-const { Pool } = require('pg');
+const pool = require('../db/config');
 
-// Database connection - FIXED SSL CONFIGURATION
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'cisops',
-  user: process.env.DB_USER || 'cisops',
-  password: process.env.DB_PASSWORD || 'cisops123',
-  // FIXED: Disable SSL for internal Kubernetes communication
-  ssl: false,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+// Using shared PostgreSQL pool from `db/config.js`
 
 // JWT Secret
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';

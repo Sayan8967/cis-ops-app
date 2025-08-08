@@ -17,18 +17,24 @@ export default function Dashboard() {
         setLoadingData(true);
         setError(null);
 
+        // Prepare headers with user email for backend auth
+        const headers = { 'Content-Type': 'application/json' };
+        if (user?.email) {
+          headers['X-User-Email'] = user.email;
+        }
+
         // Fetch metrics
-        const metricsResponse = await fetch(API_ENDPOINTS.METRICS);
+        const metricsResponse = await fetch(API_ENDPOINTS.METRICS, { headers });
         if (metricsResponse.ok) {
           const metricsData = await metricsResponse.json();
-          setMetrics(metricsData.success ? metricsData.current : metricsData);
+          setMetrics(metricsData.success ? (metricsData.metrics || metricsData) : metricsData);
         }
 
         // Fetch system info
-        const systemResponse = await fetch(API_ENDPOINTS.SYSTEM);
+        const systemResponse = await fetch(API_ENDPOINTS.SYSTEM, { headers });
         if (systemResponse.ok) {
           const systemData = await systemResponse.json();
-          setSystemInfo(systemData.success ? systemData.system : systemData);
+          setSystemInfo(systemData.success ? (systemData.system || systemData) : systemData);
         }
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error);

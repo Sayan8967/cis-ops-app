@@ -13,6 +13,22 @@ const API_ENDPOINTS = {
   AUTH_LOGOUT: '/api/auth/logout',
 };
 
+// Helper to probe possible backend base URLs (for websockets or debug)
+export const getBestBackendUrl = async () => {
+  const candidates = [
+    window.location.origin,
+    `http://${window.location.hostname}:30400`,
+    `http://${window.location.hostname}:4000`,
+  ];
+  for (const base of candidates) {
+    try {
+      const res = await fetch(`${base}/api/health`, { method: 'GET' });
+      if (res.ok) return { url: base, status: 'ok' };
+    } catch (_) {}
+  }
+  return { url: window.location.origin, status: 'fallback' };
+};
+
 // Test backend connectivity
 const testBackendConnection = async (url = '/api/health') => {
   try {

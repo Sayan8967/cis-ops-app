@@ -5,7 +5,9 @@ const path = require('path');
 const { Pool } = require('pg');
 const axios = require('axios');
 const os = require('os');
-const { getMetrics } = require('./metrics');
+const getMetrics = require('./metrics');
+const pool = require('./db/config');
+const authController = require('./controllers/authController');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -22,18 +24,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Database connection
-const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'cisops',
-  user: process.env.DB_USER || 'cisops',
-  password: process.env.DB_PASSWORD || 'cisops123',
-  ssl: false,
-  max: 5,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+// Database connection now uses centralized config in `db/config.js`
 
 // Initialize database and create tables
 const initializeDatabase = async () => {
@@ -46,10 +37,12 @@ const initializeDatabase = async () => {
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) UNIQUE NOT NULL,
+        picture TEXT,
         role VARCHAR(50) NOT NULL DEFAULT 'user',
         status VARCHAR(50) NOT NULL DEFAULT 'active',
         last_login TIMESTAMP,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
 
@@ -140,6 +133,11 @@ app.get('/api/auth/user', (req, res) => {
     }
   });
 });
+
+// Authentication routes (used by frontend authService)
+app.post('/api/auth/google', authController.googleLogin);
+app.post('/api/auth/logout', authController.logout);
+app.get('/api/auth/profile', authController.getProfile);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
