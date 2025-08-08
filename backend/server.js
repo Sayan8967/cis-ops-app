@@ -5,6 +5,7 @@ const path = require('path');
 const { Pool } = require('pg');
 const axios = require('axios');
 const os = require('os');
+const { getMetrics } = require('./metrics');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -120,6 +121,26 @@ const requireRole = (roles) => {
   };
 };
 
+// Get current user info
+app.get('/api/auth/user', (req, res) => {
+  const userEmail = req.headers['x-user-email'];
+  if (!userEmail) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+
+  const role = determineUserRole(userEmail);
+  res.json({
+    success: true,
+    user: {
+      email: userEmail,
+      role: role
+    }
+  });
+});
+
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
@@ -128,6 +149,51 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     hostname: os.hostname()
   });
+});
+
+// Metrics endpoint
+app.get('/api/metrics', requireAuth, (req, res) => {
+  try {
+    const metrics = getMetrics();
+    res.json({
+      success: true,
+      metrics
+    });
+  } catch (error) {
+    console.error('Error fetching metrics:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch metrics'
+    });
+  }
+});
+
+// System info endpoint
+app.get('/api/system', requireAuth, (req, res) => {
+  try {
+    const systemInfo = {
+      platform: os.platform(),
+      arch: os.arch(),
+      cpus: os.cpus().length,
+      totalMemory: os.totalmem(),
+      freeMemory: os.freemem(),
+      uptime: os.uptime(),
+      loadavg: os.loadavg(),
+      nodeVersion: process.version,
+      containerized: process.env.KUBERNETES_SERVICE_HOST ? true : false
+    };
+
+    res.json({
+      success: true,
+      system: systemInfo
+    });
+  } catch (error) {
+    console.error('Error fetching system info:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch system info'
+    });
+  }
 });
 
 // Users endpoint with role-based access
