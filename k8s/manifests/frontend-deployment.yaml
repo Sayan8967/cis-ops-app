@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: frontend
-        image: docker.io/sayan896/cis-ops-frontend:78062f8705738cd7894bda0d4a8ed2a1396fb360
+        image: docker.io/sayan896/cis-ops-frontend:ec4401a9d83e113c82dac1a1fa538a90a888ca06
         ports:
         - containerPort: 80
           name: http
