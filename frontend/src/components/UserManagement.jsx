@@ -81,7 +81,13 @@ export default function UserManagement() {
       console.log('Users fetched successfully:', data);
       
       if (data.success && data.users) {
-        setUsers(data.users);
+        // Transform data to ensure consistent format
+        const formattedUsers = data.users.map(user => ({
+          ...user,
+          lastLogin: user.lastLogin || user.last_login,
+          createdAt: user.createdAt || user.created_at
+        }));
+        setUsers(formattedUsers);
       } else {
         throw new Error('Invalid response format');
       }
@@ -125,11 +131,15 @@ export default function UserManagement() {
           body: JSON.stringify(formData)
         });
         
-        if (data.success) {
-          // Update the user in local state
+        if (data.success && data.user) {
+          // Update the user in local state with the returned user data
           setUsers(users.map(user => 
             user.id === editingUser.id 
-              ? { ...user, ...formData, updated_at: new Date().toISOString() }
+              ? {
+                  ...data.user,
+                  lastLogin: data.user.lastLogin || data.user.last_login,
+                  createdAt: data.user.createdAt || data.user.created_at
+                }
               : user
           ));
         }

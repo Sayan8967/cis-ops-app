@@ -15,3 +15,5 @@ Dockerfile
 .dockerignore
 logs
 *.log
+server.js.new
+server.js.backend
