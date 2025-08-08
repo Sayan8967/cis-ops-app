@@ -156,35 +156,55 @@ export function AuthProvider({ children }) {
     // Since we're not using JWT, just return a simple fetch wrapper
     return {
       get: async (url) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (user && user.email) {
+          headers['X-User-Email'] = user.email;
+        }
+        
         const response = await fetch(url, {
           method: 'GET',
-          headers: { 'Content-Type': 'application/json' }
+          headers
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       },
       post: async (url, data) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (user && user.email) {
+          headers['X-User-Email'] = user.email;
+        }
+        
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(data)
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       },
       put: async (url, data) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (user && user.email) {
+          headers['X-User-Email'] = user.email;
+        }
+        
         const response = await fetch(url, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(data)
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       },
       delete: async (url) => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (user && user.email) {
+          headers['X-User-Email'] = user.email;
+        }
+        
         const response = await fetch(url, {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' }
+          headers
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();

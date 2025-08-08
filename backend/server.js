@@ -1,4 +1,4 @@
-// backend/server.js - Enhanced with user role support
+// backend/server.js - Enhanced with session-based authentication
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 4000;
 const corsOptions = {
   origin: ['http://localhost:3000', 'http://localhost:30080', 'http://mydevopsproject.live:30080', '*'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Email'],
   credentials: false,
   optionsSuccessStatus: 200
 };
@@ -47,8 +47,8 @@ const testDatabaseConnection = async () => {
   }
 };
 
-// Mock user storage with roles
-let currentUser = null;
+// In-memory user sessions (for demo - in production use Redis or database)
+const userSessions = new Map();
 
 // Mock users database
 const mockUsers = [
@@ -87,6 +87,58 @@ const determineUserRole = (email) => {
     return 'moderator';
   }
   return 'admin'; // Default to admin for demo purposes
+};
+
+// Helper function to get user from session
+const getUserFromSession = (req) => {
+  const userEmail = req.headers['x-user-email'] || req.headers['authorization']?.replace('Bearer ', '');
+  if (userEmail && userSessions.has(userEmail)) {
+    return userSessions.get(userEmail);
+  }
+  return null;
+};
+
+// Middleware to check authentication
+const requireAuth = (req, res, next) => {
+  const user = getUserFromSession(req);
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Authentication required'
+    });
+  }
+  req.user = user;
+  next();
+};
+
+// Middleware to check roles
+const requireRole = (roles) => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    const roleHierarchy = {
+      'user': 1,
+      'moderator': 2,
+      'admin': 3
+    };
+
+    const userLevel = roleHierarchy[req.user.role] || 0;
+    const requiredLevel = Math.min(...roles.map(role => roleHierarchy[role] || 0));
+
+    if (userLevel < requiredLevel) {
+      return res.status(403).json({
+        success: false,
+        message: `Insufficient permissions. Required: ${roles.join(' or ')}. Current: ${req.user.role}`
+      });
+    }
+
+    next();
+  };
 };
 
 // Mock metrics data
@@ -141,7 +193,7 @@ app.use((req, res, next) => {
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-User-Email');
   res.sendStatus(200);
 });
 
@@ -149,12 +201,14 @@ app.options('*', (req, res) => {
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
+  const user = getUserFromSession(req);
   res.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
     uptime: Math.floor(process.uptime()),
     version: '2.0.0',
-    user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
+    activeSessions: userSessions.size,
+    user: user ? { name: user.name, email: user.email, role: user.role } : null
   });
 });
 
@@ -211,8 +265,8 @@ app.post('/api/auth/google', async (req, res) => {
     // Determine user role
     const userRole = determineUserRole(googleUserData.email);
     
-    // Store user data with role
-    currentUser = {
+    // Store user session
+    const userData = {
       id: Date.now(),
       name: googleUserData.name,
       email: googleUserData.email,
@@ -222,18 +276,20 @@ app.post('/api/auth/google', async (req, res) => {
       loginTime: new Date().toISOString()
     };
     
-    console.log('Login successful for user:', currentUser.email, 'with role:', currentUser.role);
+    userSessions.set(googleUserData.email, userData);
+    
+    console.log('Login successful for user:', userData.email, 'with role:', userData.role);
     
     res.json({
       success: true,
       message: 'Login successful',
       user: {
-        id: currentUser.id,
-        name: currentUser.name,
-        email: currentUser.email,
-        picture: currentUser.picture,
-        role: currentUser.role,
-        status: currentUser.status
+        id: userData.id,
+        name: userData.name,
+        email: userData.email,
+        picture: userData.picture,
+        role: userData.role,
+        status: userData.status
       }
     });
     
@@ -248,16 +304,18 @@ app.post('/api/auth/google', async (req, res) => {
 
 // Check current user
 app.get('/api/auth/user', (req, res) => {
-  if (currentUser) {
+  const user = getUserFromSession(req);
+  
+  if (user) {
     res.json({
       success: true,
       user: {
-        id: currentUser.id,
-        name: currentUser.name,
-        email: currentUser.email,
-        picture: currentUser.picture,
-        role: currentUser.role,
-        status: currentUser.status
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        picture: user.picture,
+        role: user.role,
+        status: user.status
       }
     });
   } else {
@@ -270,10 +328,12 @@ app.get('/api/auth/user', (req, res) => {
 
 // Logout
 app.post('/api/auth/logout', (req, res) => {
-  if (currentUser) {
-    console.log('User logged out:', currentUser.email);
+  const user = getUserFromSession(req);
+  
+  if (user) {
+    console.log('User logged out:', user.email);
+    userSessions.delete(user.email);
   }
-  currentUser = null;
   
   res.json({
     success: true,
@@ -285,10 +345,12 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/metrics', (req, res) => {
   try {
     const metrics = getSimpleMetrics();
+    const user = getUserFromSession(req);
+    
     res.json({
       success: true,
       current: metrics,
-      user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
+      user: user ? { name: user.name, email: user.email, role: user.role } : null
     });
   } catch (error) {
     console.error('Error in /api/metrics:', error);
@@ -301,169 +363,170 @@ app.get('/api/metrics', (req, res) => {
 });
 
 // Users endpoint with role-based access
-app.get('/api/users', (req, res) => {
-  // Check if user is authenticated and has appropriate role
-  if (!currentUser) {
-    return res.status(401).json({
+app.get('/api/users', requireAuth, requireRole(['moderator', 'admin']), (req, res) => {
+  try {
+    // Add current user to mock users if not already present
+    const allUsers = [...mockUsers];
+    
+    // Add current user if not in mock data
+    if (!allUsers.find(u => u.email === req.user.email)) {
+      allUsers.unshift({
+        id: req.user.id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        status: req.user.status,
+        lastLogin: req.user.loginTime
+      });
+    }
+
+    res.json({
+      success: true,
+      users: allUsers,
+      count: allUsers.length,
+      currentUserRole: req.user.role
+    });
+    
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({
       success: false,
-      message: 'Authentication required'
+      message: 'Failed to fetch users'
     });
   }
-
-  // Only moderators and admins can view users
-  if (currentUser.role !== 'admin' && currentUser.role !== 'moderator') {
-    return res.status(403).json({
-      success: false,
-      message: 'Insufficient permissions. Moderator or admin role required.'
-    });
-  }
-
-  // Add current user to mock users if not already present
-  const allUsers = [...mockUsers];
-  
-  // Add current user if not in mock data
-  if (!allUsers.find(u => u.email === currentUser.email)) {
-    allUsers.unshift({
-      id: currentUser.id,
-      name: currentUser.name,
-      email: currentUser.email,
-      role: currentUser.role,
-      status: currentUser.status,
-      lastLogin: currentUser.loginTime
-    });
-  }
-
-  res.json({
-    success: true,
-    users: allUsers,
-    count: allUsers.length,
-    currentUserRole: currentUser.role
-  });
 });
 
 // Create user endpoint (admin only)
-app.post('/api/users', (req, res) => {
-  if (!currentUser || currentUser.role !== 'admin') {
-    return res.status(403).json({
+app.post('/api/users', requireAuth, requireRole(['admin']), (req, res) => {
+  try {
+    const { name, email, role, status } = req.body;
+    
+    // Validate required fields
+    if (!name || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name and email are required'
+      });
+    }
+
+    // Check if user already exists
+    if (mockUsers.find(u => u.email === email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email already exists'
+      });
+    }
+
+    const newUser = {
+      id: Date.now(),
+      name,
+      email,
+      role: role || 'user',
+      status: status || 'active',
+      lastLogin: null,
+      createdAt: new Date().toISOString()
+    };
+
+    mockUsers.push(newUser);
+
+    res.json({
+      success: true,
+      message: 'User created successfully',
+      user: newUser
+    });
+    
+  } catch (error) {
+    console.error('Error creating user:', error);
+    res.status(500).json({
       success: false,
-      message: 'Admin role required to create users'
+      message: 'Failed to create user'
     });
   }
-
-  const { name, email, role, status } = req.body;
-  
-  // Validate required fields
-  if (!name || !email) {
-    return res.status(400).json({
-      success: false,
-      message: 'Name and email are required'
-    });
-  }
-
-  // Check if user already exists
-  if (mockUsers.find(u => u.email === email)) {
-    return res.status(400).json({
-      success: false,
-      message: 'User with this email already exists'
-    });
-  }
-
-  const newUser = {
-    id: Date.now(),
-    name,
-    email,
-    role: role || 'user',
-    status: status || 'active',
-    lastLogin: null,
-    createdAt: new Date().toISOString()
-  };
-
-  mockUsers.push(newUser);
-
-  res.json({
-    success: true,
-    message: 'User created successfully',
-    user: newUser
-  });
 });
 
 // Update user endpoint (admin only)
-app.put('/api/users/:id', (req, res) => {
-  if (!currentUser || currentUser.role !== 'admin') {
-    return res.status(403).json({
+app.put('/api/users/:id', requireAuth, requireRole(['admin']), (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { name, email, role, status } = req.body;
+
+    const userIndex = mockUsers.findIndex(u => u.id === userId);
+    
+    if (userIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user
+    mockUsers[userIndex] = {
+      ...mockUsers[userIndex],
+      name: name || mockUsers[userIndex].name,
+      email: email || mockUsers[userIndex].email,
+      role: role || mockUsers[userIndex].role,
+      status: status || mockUsers[userIndex].status,
+      updatedAt: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      user: mockUsers[userIndex]
+    });
+    
+  } catch (error) {
+    console.error('Error updating user:', error);
+    res.status(500).json({
       success: false,
-      message: 'Admin role required to update users'
+      message: 'Failed to update user'
     });
   }
-
-  const userId = parseInt(req.params.id);
-  const { name, email, role, status } = req.body;
-
-  const userIndex = mockUsers.findIndex(u => u.id === userId);
-  
-  if (userIndex === -1) {
-    return res.status(404).json({
-      success: false,
-      message: 'User not found'
-    });
-  }
-
-  // Update user
-  mockUsers[userIndex] = {
-    ...mockUsers[userIndex],
-    name: name || mockUsers[userIndex].name,
-    email: email || mockUsers[userIndex].email,
-    role: role || mockUsers[userIndex].role,
-    status: status || mockUsers[userIndex].status,
-    updatedAt: new Date().toISOString()
-  };
-
-  res.json({
-    success: true,
-    message: 'User updated successfully',
-    user: mockUsers[userIndex]
-  });
 });
 
 // Delete user endpoint (admin only)
-app.delete('/api/users/:id', (req, res) => {
-  if (!currentUser || currentUser.role !== 'admin') {
-    return res.status(403).json({
+app.delete('/api/users/:id', requireAuth, requireRole(['admin']), (req, res) => {
+  try {
+    const userId = parseInt(req.params.id);
+    
+    // Prevent deleting current user
+    if (req.user.id === userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot delete your own account'
+      });
+    }
+
+    const userIndex = mockUsers.findIndex(u => u.id === userId);
+    
+    if (userIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const deletedUser = mockUsers.splice(userIndex, 1)[0];
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully',
+      user: deletedUser
+    });
+    
+  } catch (error) {
+    console.error('Error deleting user:', error);
+    res.status(500).json({
       success: false,
-      message: 'Admin role required to delete users'
+      message: 'Failed to delete user'
     });
   }
-
-  const userId = parseInt(req.params.id);
-  
-  // Prevent deleting current user
-  if (currentUser.id === userId) {
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot delete your own account'
-    });
-  }
-
-  const userIndex = mockUsers.findIndex(u => u.id === userId);
-  
-  if (userIndex === -1) {
-    return res.status(404).json({
-      success: false,
-      message: 'User not found'
-    });
-  }
-
-  const deletedUser = mockUsers.splice(userIndex, 1)[0];
-
-  res.json({
-    success: true,
-    message: 'User deleted successfully',
-    user: deletedUser
-  });
 });
 
 // System info endpoint
 app.get('/api/system', (req, res) => {
+  const user = getUserFromSession(req);
+  
   res.json({
     success: true,
     system: {
@@ -478,7 +541,7 @@ app.get('/api/system', (req, res) => {
       cpus: os.cpus().length
     },
     environment: process.env.NODE_ENV || 'development',
-    user: currentUser ? { name: currentUser.name, email: currentUser.email, role: currentUser.role } : null
+    user: user ? { name: user.name, email: user.email, role: user.role } : null
   });
 });
 
@@ -535,10 +598,10 @@ const startServer = async () => {
       console.log('  POST /api/auth/logout');
       console.log('📈 API endpoints:');
       console.log('  GET  /api/metrics');
-      console.log('  GET  /api/users (role-based)');
-      console.log('  POST /api/users (admin only)');
-      console.log('  PUT  /api/users/:id (admin only)');
-      console.log('  DELETE /api/users/:id (admin only)');
+      console.log('  GET  /api/users (requires moderator+)');
+      console.log('  POST /api/users (requires admin)');
+      console.log('  PUT  /api/users/:id (requires admin)');
+      console.log('  DELETE /api/users/:id (requires admin)');
       console.log('  GET  /api/system');
       console.log('🔒 CORS enabled for Kubernetes');
       console.log(`🏠 Hostname: ${os.hostname()}`);

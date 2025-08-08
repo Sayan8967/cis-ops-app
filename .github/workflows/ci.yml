@@ -3,9 +3,9 @@ name: CI/CD Pipeline with Enhanced Frontend
 
 on:
   push:
-    branches: [releaseV2, main]
+    branches: [releaseV2.5-feature/user-management, main]
   pull_request:
-    branches: [releaseV2, main]
+    branches: [releaseV2.5-feature/user-management, main]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}

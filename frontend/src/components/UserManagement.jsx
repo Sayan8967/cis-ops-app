@@ -1,3 +1,4 @@
+// frontend/src/components/UserManagement.jsx - FIXED with proper authentication
 import React, { useState, useEffect } from 'react';
 import { useAuthContext } from '../context/AuthContext.jsx';
 import Navbar from '../components/Navbar.jsx';
@@ -23,17 +24,45 @@ export default function UserManagement() {
   const canEditUsers = hasRole('admin');
   const canDeleteUsers = hasRole('admin');
 
+  // Helper function to make authenticated requests
+  const makeAuthenticatedRequest = async (url, options = {}) => {
+    if (!currentUser || !currentUser.email) {
+      throw new Error('User not authenticated');
+    }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-User-Email': currentUser.email,
+      ...options.headers
+    };
+
+    const response = await fetch(url, {
+      ...options,
+      headers
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ message: response.statusText }));
+      throw new Error(`HTTP ${response.status}: ${errorData.message || response.statusText}`);
+    }
+
+    return response.json();
+  };
+
   useEffect(() => {
-    if (canManageUsers) {
+    if (canManageUsers && currentUser) {
       fetchUsers();
+    } else if (!currentUser) {
+      setLoading(false);
+      setError('User not authenticated');
     } else {
       setLoading(false);
       setError('Insufficient permissions to view users');
     }
-  }, [canManageUsers]);
+  }, [canManageUsers, currentUser]);
 
   const fetchUsers = async () => {
-    if (!canManageUsers) {
+    if (!canManageUsers || !currentUser) {
       setError('Insufficient permissions to view users');
       setLoading(false);
       return;
@@ -43,66 +72,30 @@ export default function UserManagement() {
       setLoading(true);
       setError(null);
       
-      console.log('Fetching users...');
-      const response = await fetch('/api/users', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        }
+      console.log('Fetching users with authentication...');
+      
+      const data = await makeAuthenticatedRequest('/api/users', {
+        method: 'GET'
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       console.log('Users fetched successfully:', data);
       
-      // Create mock users for demonstration if only current user exists
-      const fetchedUsers = data.users || [];
-      if (fetchedUsers.length <= 1) {
-        const mockUsers = [
-          {
-            id: 1,
-            name: currentUser?.name || 'Current User',
-            email: currentUser?.email || 'user@example.com',
-            role: currentUser?.role || 'admin',
-            status: 'active',
-            lastLogin: new Date().toISOString()
-          },
-          {
-            id: 2,
-            name: 'Jane Smith',
-            email: 'jane@example.com',
-            role: 'moderator',
-            status: 'active',
-            lastLogin: new Date(Date.now() - 86400000).toISOString()
-          },
-          {
-            id: 3,
-            name: 'Bob Wilson',
-            email: 'bob@example.com',
-            role: 'user',
-            status: 'active',
-            lastLogin: new Date(Date.now() - 172800000).toISOString()
-          },
-          {
-            id: 4,
-            name: 'Alice Johnson',
-            email: 'alice@example.com',
-            role: 'user',
-            status: 'inactive',
-            lastLogin: new Date(Date.now() - 604800000).toISOString()
-          }
-        ];
-        setUsers(mockUsers);
+      if (data.success && data.users) {
+        setUsers(data.users);
       } else {
-        setUsers(fetchedUsers);
+        throw new Error('Invalid response format');
       }
       
     } catch (error) {
       console.error('Error fetching users:', error);
-      setError('Failed to load users. Please check your connection and try again.');
+      
+      if (error.message.includes('401')) {
+        setError('Authentication required. Please log in again.');
+      } else if (error.message.includes('403')) {
+        setError('Insufficient permissions to view users.');
+      } else {
+        setError('Failed to load users. Please check your connection and try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -126,30 +119,47 @@ export default function UserManagement() {
       
       if (editingUser) {
         console.log('Updating user:', editingUser.id, formData);
-        // Update the user in local state
-        setUsers(users.map(user => 
-          user.id === editingUser.id 
-            ? { ...user, ...formData, updated_at: new Date().toISOString() }
-            : user
-        ));
+        
+        const data = await makeAuthenticatedRequest(`/api/users/${editingUser.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(formData)
+        });
+        
+        if (data.success) {
+          // Update the user in local state
+          setUsers(users.map(user => 
+            user.id === editingUser.id 
+              ? { ...user, ...formData, updated_at: new Date().toISOString() }
+              : user
+          ));
+        }
+        
       } else {
         console.log('Creating user:', formData);
-        // Add new user to local state
-        const newUser = {
-          id: Date.now(),
-          ...formData,
-          lastLogin: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        setUsers([...users, newUser]);
+        
+        const data = await makeAuthenticatedRequest('/api/users', {
+          method: 'POST',
+          body: JSON.stringify(formData)
+        });
+        
+        if (data.success && data.user) {
+          // Add new user to local state
+          setUsers([...users, data.user]);
+        }
       }
       
       resetForm();
       
     } catch (error) {
       console.error('Error saving user:', error);
-      setError('Failed to save user. Please try again.');
+      
+      if (error.message.includes('401')) {
+        setError('Authentication required. Please log in again.');
+      } else if (error.message.includes('403')) {
+        setError('Insufficient permissions to perform this action.');
+      } else {
+        setError('Failed to save user. Please try again.');
+      }
     }
   };
 
@@ -164,12 +174,25 @@ export default function UserManagement() {
         setError(null);
         console.log('Deleting user:', userId);
         
-        // Remove user from local state
-        setUsers(users.filter(user => user.id !== userId));
+        const data = await makeAuthenticatedRequest(`/api/users/${userId}`, {
+          method: 'DELETE'
+        });
+        
+        if (data.success) {
+          // Remove user from local state
+          setUsers(users.filter(user => user.id !== userId));
+        }
         
       } catch (error) {
         console.error('Error deleting user:', error);
-        setError('Failed to delete user. Please try again.');
+        
+        if (error.message.includes('401')) {
+          setError('Authentication required. Please log in again.');
+        } else if (error.message.includes('403')) {
+          setError('Insufficient permissions to delete users.');
+        } else {
+          setError('Failed to delete user. Please try again.');
+        }
       }
     }
   };
@@ -216,7 +239,7 @@ export default function UserManagement() {
       
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Permission denied view */}
-        {!canManageUsers ? (
+        {!canManageUsers || !currentUser ? (
           <div className="space-y-6">
             <div className="text-center py-12">
               <div className="mx-auto h-24 w-24 text-gray-400">
@@ -226,11 +249,22 @@ export default function UserManagement() {
               </div>
               <h3 className="mt-4 text-lg font-medium text-gray-900">Access Restricted</h3>
               <p className="mt-2 text-gray-600">
-                You need moderator or admin privileges to access user management.
+                {!currentUser ? 
+                  'Please log in to access user management.' :
+                  'You need moderator or admin privileges to access user management.'
+                }
               </p>
               <p className="mt-1 text-sm text-gray-500">
-                Current role: <span className="font-medium">{currentUser?.role || 'user'}</span>
+                Current role: <span className="font-medium">{currentUser?.role || 'not authenticated'}</span>
               </p>
+              {!currentUser && (
+                <button
+                  onClick={() => window.location.href = '/login'}
+                  className="mt-4 bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+                >
+                  Go to Login
+                </button>
+              )}
             </div>
           </div>
         ) : (
