@@ -12,7 +12,7 @@ REACT_APP_BACKEND_URL=http://cis-ops-backend-service:4000
 ```bash
 cd backend
 npm install
-# For local development:
+# For local development :::
 node server.js
 # For Kubernetes, build and deploy the backend container as described in k8s/manifests/backend-deployment.yaml
 ```
