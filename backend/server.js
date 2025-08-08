@@ -67,6 +67,23 @@ const initializeDatabase = async () => {
   }
 };
 
+// Ensure users table exists before user operations
+const ensureUsersTable = async (client) => {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      role VARCHAR(50) NOT NULL DEFAULT 'user',
+      status VARCHAR(50) NOT NULL DEFAULT 'active',
+      last_login TIMESTAMP,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS picture TEXT`);
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+};
+
 // Helper function to determine user role
 const determineUserRole = (email) => {
   if (email.includes('admin') || email.endsWith('@cisops.com')) {
@@ -201,6 +218,9 @@ app.get('/api/users', requireAuth, requireRole(['moderator', 'admin']), async (r
   const handle = async () => {
     const client = await pool.connect();
     try {
+      // Make sure schema exists
+      await ensureUsersTable(client);
+
       // First, ensure current user exists in database
       await client.query(
         `INSERT INTO users (name, email, role, status, last_login)
@@ -251,6 +271,7 @@ app.put('/api/users/:id', requireAuth, requireRole(['admin']), async (req, res) 
   const handle = async () => {
     const client = await pool.connect();
     try {
+      await ensureUsersTable(client);
       const userResult = await client.query('SELECT 1 FROM users WHERE id = $1', [id]);
       if (userResult.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'User not found' });
@@ -293,6 +314,7 @@ app.delete('/api/users/:id', requireAuth, requireRole(['admin']), async (req, re
   const handle = async () => {
     const client = await pool.connect();
     try {
+      await ensureUsersTable(client);
       const userResult = await client.query('SELECT 1 FROM users WHERE id = $1', [id]);
       if (userResult.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'User not found' });
@@ -334,6 +356,9 @@ app.post('/api/users', requireAuth, requireRole(['admin']), async (req, res) => 
   const handle = async () => {
     const client = await pool.connect();
     try {
+      // Make sure schema exists
+      await ensureUsersTable(client);
+
       let result;
       try {
         result = await client.query(
