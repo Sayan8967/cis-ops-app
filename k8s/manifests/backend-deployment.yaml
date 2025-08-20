@@ -17,13 +17,10 @@ spec:
     spec:
       containers:
       - name: backend
-        image: docker.io/sayan896/cis-ops-backend:c1f5860287a3a02ee8fa527de0c6579058443d80
+        image: docker.io/sayan896/cis-ops-backend:064d78c4c2cb7be1c9050a94937f92cff782624b
         ports:
         - containerPort: 4000
           name: http
-        - containerPort: 9400
-          name: metrics
-          protocol: TCP
         envFrom:
         - configMapRef:
             name: backend-config
@@ -58,4 +55,3 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 12
-        # Expose metrics port for Prometheus scraping (handled in ports list)
