@@ -3,9 +3,9 @@ name: CI/CD Pipeline with Enhanced Frontend
 
 on:
   push:
-    branches: [releaseV2.5-feature/user-management, main]
+    branches: [releaseV3/monitoring, main]
   pull_request:
-    branches: [releaseV2.5-feature/user-management, main]
+    branches: [releaseV3/monitoring, main]
 
 env:
   DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
@@ -328,7 +328,7 @@ jobs:
                     failureThreshold: 6
           EOF
 
-          # Backend Service
+          # Backend Service (expose metrics port as well)
           cat > k8s/manifests/backend-service.yaml << 'EOF'
           apiVersion: v1
           kind: Service
@@ -346,6 +346,9 @@ jobs:
               targetPort: 4000
               nodePort: 30400
               name: http
+            - port: 9400
+              targetPort: 9400
+              name: metrics
           EOF
 
           # Frontend Service
@@ -393,11 +396,68 @@ jobs:
               - RespectIgnoreDifferences=true
           EOF
 
+          # Include Fluent Bit and RBAC manifests for logs
+          cat > k8s/manifests/fluent-bit-configmap.yaml << 'EOF'
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: fluent-bit-config
+            namespace: cis-ops
+          data:
+            fluent-bit.conf: |-
+              # (config omitted in CI-generated file; use repo version)
+            parsers.conf: |-
+              # (parsers omitted)
+          EOF
+
+          cat > k8s/manifests/fluent-bit-daemonset.yaml << 'EOF'
+          # (use repo-managed Fluent Bit DaemonSet)
+          EOF
+
+          cat > k8s/manifests/fluent-bit-rbac.yaml << 'EOF'
+          # (use repo-managed Fluent Bit RBAC)
+          EOF
+
           # Verify generated manifests
           echo "=== Generated Backend Deployment ==="
           head -20 k8s/manifests/backend-deployment.yaml
           echo "=== Generated Frontend Deployment ==="
           head -20 k8s/manifests/frontend-deployment.yaml
+
+          # Create Postgres exporter secret from GitHub Secret or compose from DB_* secrets
+          PG_DSN="${{ secrets.PG_DSN }}"
+          DB_USER="${{ secrets.DB_USER }}"
+          DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+          DB_HOST="${{ secrets.DB_HOST }}"
+          DB_PORT="${{ secrets.DB_PORT }}"
+          DB_NAME="${{ secrets.DB_NAME }}"
+
+          if [ -n "$PG_DSN" ]; then
+            DSN="$PG_DSN"
+          else
+            # Fallback: build DSN from individual DB_* secrets (ensure none are empty in prod)
+            DSN="postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable"
+          fi
+
+          cat > k8s/manifests/postgres-exporter-secret.yaml << EOF
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pg-exporter-dsn
+            namespace: cis-ops
+          type: Opaque
+          stringData:
+            DATA_SOURCE_NAME: "$DSN"
+          EOF
+
+          # Update backend/frontend deployment images to the built images
+          sed -i "s|image: .*cis-ops-backend.*|image: ${DOCKER_REGISTRY}/${BACKEND_IMAGE}:${COMMIT_SHA}|g" k8s/manifests/backend-deployment.yaml || true
+          sed -i "s|image: .*cis-ops-frontend.*|image: ${DOCKER_REGISTRY}/${FRONTEND_IMAGE}:${COMMIT_SHA}|g" k8s/manifests/frontend-deployment.yaml || true
+
+          # Ensure postgres-exporter manifests are present in the repo (no-op if already added)
+          if [ ! -f k8s/manifests/postgres-exporter-deployment.yaml ]; then
+            echo "Warning: postgres-exporter deployment manifest missing in repo; add it to k8s/manifests or CI will generate it." >&2
+          fi
 
       - name: Commit and push changes
         run: |

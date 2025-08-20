@@ -22,8 +22,8 @@ RUN addgroup -g 1001 -S nodejs && \
 
 USER backend
 
-# Expose port
-EXPOSE 4000
+# Expose ports (app + Prometheus metrics)
+EXPOSE 4000 9400
 
 # Environment variables
 ENV NODE_ENV=production

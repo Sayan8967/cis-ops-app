@@ -6,3 +6,4 @@ metadata:
 data:
   NODE_ENV: "production"
   PORT: "4000"
+  METRICS_PATH: "/metrics"

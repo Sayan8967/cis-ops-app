@@ -8,9 +8,40 @@ const os = require('os');
 const getMetrics = require('./metrics');
 const pool = require('./db/config');
 const authController = require('./controllers/authController');
+// Monitoring and logging
+const promClient = require('prom-client');
+const pino = require('pino');
+
+const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+
+// Prometheus default metrics collection
+promClient.collectDefaultMetrics({ prefix: 'cis_ops_' });
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Create some custom metrics
+const httpRequestDurationMilliseconds = new promClient.Histogram({
+  name: 'cis_ops_http_request_duration_ms',
+  help: 'Duration of HTTP requests in ms',
+  labelNames: ['method', 'route', 'status_code'],
+  buckets: [50, 100, 200, 300, 500, 1000, 2000]
+});
+
+// Middleware to measure request durations (placed after app is created)
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    try {
+      httpRequestDurationMilliseconds.labels(req.method, req.route ? req.route.path : req.path, res.statusCode).observe(duration);
+    } catch (e) {
+      // ignore metrics labeling errors
+    }
+    logger.info({ method: req.method, path: req.path, status: res.statusCode, duration }, 'request_finished');
+  });
+  next();
+});
 
 // CORS configuration for Kubernetes
 const corsOptions = {
@@ -169,19 +200,26 @@ app.get('/api/health', (req, res) => {
 });
 
 // Metrics endpoint
+// Keep the JSON metrics API for the app
 app.get('/api/metrics', requireAuth, (req, res) => {
   try {
     const metrics = getMetrics();
-    res.json({
-      success: true,
-      metrics
-    });
+    res.json({ success: true, metrics });
   } catch (error) {
-    console.error('Error fetching metrics:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch metrics'
-    });
+    logger.error({ err: error }, 'Error fetching metrics');
+    res.status(500).json({ success: false, message: 'Failed to fetch metrics' });
+  }
+});
+
+// Prometheus scrape endpoint (no auth to allow Prometheus to scrape)
+app.get('/metrics', async (req, res) => {
+  try {
+    res.set('Content-Type', promClient.register.contentType);
+    const metrics = await promClient.register.metrics();
+    res.end(metrics);
+  } catch (error) {
+    logger.error({ err: error }, 'Error serving /metrics');
+    res.status(500).end();
   }
 });
 

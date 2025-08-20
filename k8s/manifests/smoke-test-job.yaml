@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smoke-test
+  namespace: cis-ops
+  labels:
+    app: smoke-test
+spec:
+  template:
+    metadata:
+      labels:
+        app: smoke-test
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+        - name: smoke-test
+          image: bitnami/kubectl:latest
+          command: ["/bin/sh", "-c", "/scripts/smoke-test.sh"]
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: smoke-test-script
+            defaultMode: 0755
+  backoffLimit: 0
+
+

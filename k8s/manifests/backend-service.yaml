@@ -14,3 +14,6 @@ spec:
     targetPort: 4000
     nodePort: 30400
     name: http
+  - port: 9400
+    targetPort: 9400
+    name: metrics
