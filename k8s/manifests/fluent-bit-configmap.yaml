@@ -5,42 +5,6 @@ metadata:
   namespace: cis-ops
 data:
   fluent-bit.conf: |-
-    [SERVICE]
-        Flush        1
-        Daemon       Off
-        Log_Level    info
-        Parsers_File parsers.conf
-
-    [INPUT]
-        Name              tail
-        Path              /var/log/containers/*.log
-        Parser            docker
-        Tag               kube.*
-        Refresh_Interval  5
-        DB                /var/log/flb_kube.db
-        Mem_Buf_Limit     5MB
-        Skip_Long_Lines   On
-
-    [FILTER]
-        Name                kubernetes
-        Match               kube.*
-        Merge_Log           On
-        Keep_Log            Off
-        K8S-Logging.Parser  On
-        K8S-Logging.Exclude On
-
-    [OUTPUT]
-        Name        loki
-        Match       *
-        # Default Loki push URL (override by editing this file or changing DaemonSet env)
-        Url         http://loki.monitoring.svc.cluster.local:3100/api/prom/push
-        Labels      job=fluent-bit,namespace=$kubernetes['namespace'],pod=$kubernetes['pod_name'],container=$kubernetes['container_name']
-        RemoveKeys  stream,time
-
+    # (config omitted in CI-generated file; use repo version)
   parsers.conf: |-
-    [PARSER]
-        Name        docker
-        Format      json
-        Time_Key    time
-        Time_Format %Y-%m-%dT%H:%M:%S.%L
-        Time_Keep   On
+    # (parsers omitted)
