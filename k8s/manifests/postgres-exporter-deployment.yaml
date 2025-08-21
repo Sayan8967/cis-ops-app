@@ -18,9 +18,12 @@ spec:
       containers:
       - name: postgres-exporter
         image: prometheuscommunity/postgres-exporter:latest
+        args:
+          # Bind exporter to localhost on a non-standard port so nginx sidecar can terminate TLS
+          - "--web.listen-address=127.0.0.1:9188"
         ports:
-        - containerPort: 9187
-          name: metrics
+        - containerPort: 9188
+          name: metrics-internal
         env:
         - name: DATA_SOURCE_NAME
           valueFrom:
@@ -34,5 +37,31 @@ spec:
           limits:
             cpu: 200m
             memory: 256Mi
+      - name: nginx-tls
+        image: nginx:alpine
+        ports:
+        - containerPort: 9187
+          name: metrics
+        volumeMounts:
+        - name: nginx-config
+          mountPath: /etc/nginx/conf.d/default.conf
+          subPath: default.conf
+        - name: nginx-certs
+          mountPath: /etc/nginx/certs
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+      volumes:
+      - name: nginx-config
+        configMap:
+          name: pg-exporter-nginx-cm
+      - name: nginx-certs
+        secret:
+          secretName: pg-exporter-tls
 
 

@@ -13,5 +13,6 @@ spec:
     port: 9187
     targetPort: 9187
     protocol: TCP
+  type: ClusterIP
 
 

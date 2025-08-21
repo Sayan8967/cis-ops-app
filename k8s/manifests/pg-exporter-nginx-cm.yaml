@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-exporter-nginx-cm
+  namespace: cis-ops
+data:
+  default.conf: |
+    server {
+      listen 9187 ssl;
+      ssl_certificate /etc/nginx/certs/tls.crt;
+      ssl_certificate_key /etc/nginx/certs/tls.key;
+
+      location / {
+        proxy_pass http://127.0.0.1:9188;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+    }
+
+
