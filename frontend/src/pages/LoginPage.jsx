@@ -86,7 +86,7 @@ export default function LoginPage() {
             </div>
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">CIS Operations</h1>
-          <p className="text-blue-200 text-lg mb-2">System Management Portal</p>
+          <p className="text-blue-200 text-lg mb-2">Aventior System Management Portal</p>
           <p className="text-blue-300 text-sm">Secure access to your operations dashboard</p>
         </div>
 
